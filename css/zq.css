@@ -823,3 +823,34 @@ body {
   .zq-dock { right: 12px; bottom: 14px; }
   .zq-frame { inset: 8px; }
 }
+
+/* ═══════════ 轻量模式 / LOW-ORNAMENT ═══════════
+   目的：去掉纯装饰，降低地图重绘时的合成与重绘开销。
+   集中在文件末尾覆盖，布局/配色/功能不变；要恢复装饰删掉本段即可。 */
+:root {
+  --zq-panel: #0a1723;      /* 原来半透明，叠在动态地图上每帧都要混合 */
+  --zq-panel-2: #0b1a28;
+}
+#zq-ui { transition: none !important; }
+.zq-grid, .zq-grid::after { display: none !important; }   /* 全屏网格 + 暗角渐变 */
+.zq-top { background: #07121d !important; }
+.zq-led i, .zq-led.on i { box-shadow: none !important; animation: none !important; }
+.zq-card, .zq-feed, .zq-scale, #qvtoast { box-shadow: none !important; }
+.zq-lvbox .vl, .zq-step { text-shadow: none !important; }
+.zq-rep-fill, #boot .bar-fill { background: var(--zq-cy) !important; transition: none !important; }
+.zq-step { transition: none !important; }
+.zq-step.on { transform: none !important; box-shadow: none !important; border-color: var(--zq-tx) !important; }
+.zq-dock button { transition: none !important; }
+.zq-dock button:hover { transform: none !important; }
+.zq-dock button.act { box-shadow: none !important; }
+#qvdialog .box, #qvabout .box, #qvplanet .box, #qvsim .box, .zq-panel {
+  background: #0a1723 !important;
+  box-shadow: none !important;
+}
+.zq-btn, .zq-seg button { transition: none !important; }
+.zq-in:focus, .zq-ta:focus, .zq-st-dot.on { box-shadow: none !important; }
+#boot { background: #040a11 !important; }
+#boot .boot-bg::before, #boot .boot-bg .ripple { display: none !important; }
+#boot .boot-logo::after { animation: none !important; }
+#boot .boot-logo, #boot .dot { box-shadow: none !important; }
+#boot .boot-card, #boot .game-card { box-shadow: none !important; }

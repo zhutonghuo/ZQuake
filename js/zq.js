@@ -178,7 +178,11 @@
     }
     logEl.innerHTML = html;
   }
+  /* 轻量模式：签名比对，数据没变就不重建卡片 DOM */
+  var lastCardKey = '', lastDateTxt = '', autoBtn = null, bootEl = null;
   function renderIdle() {
+    if (lastCardKey === 'IDLE') return;
+    lastCardKey = 'IDLE';
     card.className = 'zq-card';
     badge.textContent = 'STANDBY';
     var obs = 1165;
@@ -195,86 +199,105 @@
     var metric = metricOf(E);
     var warn = !!E.warnPhase || +E.level >= 55;
     var alert = !warn && +E.level >= 40;
-    card.className = 'zq-card' + (warn ? ' warn' : (alert ? ' alert' : ''));
-    badge.textContent = E.isFinal ? 'FINAL' : (warn ? 'WARNING' : (E.kind === 'cancel' ? 'CANCEL' : (E.kind === 'info' ? 'INFO' : 'ALERT')));
     var lv = E.level == null ? null : +E.level;
     var col = lv == null ? '#ffbf61' : lvColor(lv, metric);
     var areas = Array.isArray(E.areas) ? E.areas.slice(0, 6) : [];
-    var areaHtml = '';
-    if (areas.length) {
-      for (var i = 0; i < areas.length; i++) {
-        var a = areas[i] || {};
-        areaHtml += '<div class="zq-area" style="border-left-color:' + lvColor(a.level == null ? lv : a.level, metric) + '">' +
-          '<span>' + esc(a.name || a.code || ('区域 ' + (i + 1))) + '</span>' +
-          '<b>' + esc(lvText(a.level == null ? lv : a.level, metric)) + '</b></div>';
-      }
-    } else {
-      areaHtml = '<div class="zq-area" style="border-left-color:' + col + '"><span>推定区域计算中</span><b>--</b></div>';
-    }
     var rep = +E.report || 0, plan = +E.plan || 0;
-    var pct = plan ? Math.max(0, Math.min(100, rep / plan * 100)) : 0;
-    cardBody.innerHTML =
-      '<div class="zq-hero">' +
-        '<div class="zq-mag"><div class="lb">MAGNITUDE / 规模</div>' +
-          '<div class="vl">M<small></small>' + num(E.mag, 1) + '</div></div>' +
-        '<div class="zq-lvbox"><div class="lb">MAX ' + (metric === 'liedu' ? 'LIEDU' : 'SHINDO') + '</div>' +
-          '<div class="vl" style="color:' + col + '">' + esc(lvText(lv, metric)) + '</div>' +
-          '<div class="sb">' + (E.isFinal ? '最终报' : '推定最大') + '</div></div>' +
-      '</div>' +
-      '<div class="zq-place">' + esc(E.place || '震源位置解析中') + '</div>' +
-      '<div class="zq-kv">' +
-        '<div><div class="k">DEPTH / 深度</div><div class="v">' + num(E.depth, 0) + ' km</div></div>' +
-        '<div><div class="k">ORIGIN / 发震</div><div class="v">' + esc(eventTime(E.timeMs)) + '</div></div>' +
-        '<div><div class="k">EPICENTER / 震中</div><div class="v">' + num(E.lat, 1) + ' , ' + num(E.lon, 1) + '</div></div>' +
-        '<div><div class="k">STATIONS / 检出</div><div class="v">' + (E.obsN == null ? '--' : E.obsN) + ' 站</div></div>' +
-      '</div>' +
-      '<div class="zq-rep"><div class="zq-rep-h"><span>REPORT SEQUENCE / 报序</span>' +
-        '<b>' + (rep || '--') + (plan ? ' / ' + plan : '') + '</b></div>' +
-        '<div class="zq-rep-track"><div class="zq-rep-fill" style="width:' + pct.toFixed(1) + '%"></div></div></div>' +
-      '<div class="zq-sub">AFFECTED AREAS / 影响区域</div>' +
-      '<div class="zq-areas">' + areaHtml + '</div>';
-    cardFoot.innerHTML = '<span>FEED <b>' + (E.q && E.q.__custom ? 'CUSTOM' : (E.q && E.q.sim ? 'SIM' : 'LIVE')) + '</b></span>' +
-      '<span>AREAS <b>' + (E.allAreas ? E.allAreas.length : (E.fillShown ? E.fillShown.length : 0)) + '</b></span>';
-    renderScale(metric, lv);
+    var feed = E.q && E.q.__custom ? 'CUSTOM' : (E.q && E.q.sim ? 'SIM' : 'LIVE');
+    var areaSig = '';
+    for (var z = 0; z < areas.length; z++) {
+      var aa = areas[z] || {};
+      areaSig += (aa.name || aa.code || '') + ':' + (aa.level == null ? lv : aa.level) + '|';
+    }
+    /* 只有数据真正变化才重建整块卡片；此前每轮 tick 无条件 innerHTML，是主要卡顿源 */
+    var key = ['E', E.eventId || '', rep, plan, E.mag, lv, metric, E.place || '', E.depth,
+      E.timeMs, E.lat, E.lon, E.obsN, E.isFinal ? 1 : 0, E.kind || '', warn ? 1 : 0,
+      alert ? 1 : 0, feed, areaSig,
+      E.allAreas ? E.allAreas.length : (E.fillShown ? E.fillShown.length : 0)].join('|');
+    if (key !== lastCardKey) {
+      lastCardKey = key;
+      card.className = 'zq-card' + (warn ? ' warn' : (alert ? ' alert' : ''));
+      badge.textContent = E.isFinal ? 'FINAL' : (warn ? 'WARNING' : (E.kind === 'cancel' ? 'CANCEL' : (E.kind === 'info' ? 'INFO' : 'ALERT')));
+      var areaHtml = '';
+      if (areas.length) {
+        for (var i = 0; i < areas.length; i++) {
+          var a = areas[i] || {};
+          areaHtml += '<div class="zq-area" style="border-left-color:' + lvColor(a.level == null ? lv : a.level, metric) + '">' +
+            '<span>' + esc(a.name || a.code || ('区域 ' + (i + 1))) + '</span>' +
+            '<b>' + esc(lvText(a.level == null ? lv : a.level, metric)) + '</b></div>';
+        }
+      } else {
+        areaHtml = '<div class="zq-area" style="border-left-color:' + col + '"><span>推定区域计算中</span><b>--</b></div>';
+      }
+      var pct = plan ? Math.max(0, Math.min(100, rep / plan * 100)) : 0;
+      cardBody.innerHTML =
+        '<div class="zq-hero">' +
+          '<div class="zq-mag"><div class="lb">MAGNITUDE / 规模</div>' +
+            '<div class="vl">M<small></small>' + num(E.mag, 1) + '</div></div>' +
+          '<div class="zq-lvbox"><div class="lb">MAX ' + (metric === 'liedu' ? 'LIEDU' : 'SHINDO') + '</div>' +
+            '<div class="vl" style="color:' + col + '">' + esc(lvText(lv, metric)) + '</div>' +
+            '<div class="sb">' + (E.isFinal ? '最终报' : '推定最大') + '</div></div>' +
+        '</div>' +
+        '<div class="zq-place">' + esc(E.place || '震源位置解析中') + '</div>' +
+        '<div class="zq-kv">' +
+          '<div><div class="k">DEPTH / 深度</div><div class="v">' + num(E.depth, 0) + ' km</div></div>' +
+          '<div><div class="k">ORIGIN / 发震</div><div class="v">' + esc(eventTime(E.timeMs)) + '</div></div>' +
+          '<div><div class="k">EPICENTER / 震中</div><div class="v">' + num(E.lat, 1) + ' , ' + num(E.lon, 1) + '</div></div>' +
+          '<div><div class="k">STATIONS / 检出</div><div class="v">' + (E.obsN == null ? '--' : E.obsN) + ' 站</div></div>' +
+        '</div>' +
+        '<div class="zq-rep"><div class="zq-rep-h"><span>REPORT SEQUENCE / 报序</span>' +
+          '<b>' + (rep || '--') + (plan ? ' / ' + plan : '') + '</b></div>' +
+          '<div class="zq-rep-track"><div class="zq-rep-fill" style="width:' + pct.toFixed(1) + '%"></div></div></div>' +
+        '<div class="zq-sub">AFFECTED AREAS / 影响区域</div>' +
+        '<div class="zq-areas">' + areaHtml + '</div>';
+      cardFoot.innerHTML = '<span>FEED <b>' + feed + '</b></span>' +
+        '<span>AREAS <b>' + (E.allAreas ? E.allAreas.length : (E.fillShown ? E.fillShown.length : 0)) + '</b></span>';
+      renderScale(metric, lv);
+      if (ledSim) ledSim.classList.toggle('on', !!(E.q && E.q.sim));
+    }
     var sig = (E.eventId || '') + '|' + rep + '|' + num(E.mag, 1) + '|' + lv + '|' + (E.isFinal ? 1 : 0);
     if (sig !== lastSig) {
       pushLog('第' + (rep || 1) + '报 · M' + num(E.mag, 1) + ' · ' + lvText(lv, metric) + (E.isFinal ? ' · 最终' : ''));
       lastSig = sig;
     }
-    if (ledSim) ledSim.classList.toggle('on', !!(E.q && E.q.sim));
   }
   function tick() {
     if (!root) return;
     var d = new Date(), ct = clockText(d);
     if (timeEl && timeEl.textContent !== ct) timeEl.textContent = ct;
-    if (dateEl) dateEl.textContent = dateText(d);
+    if (dateEl) {
+      var dt = dateText(d);
+      if (dt !== lastDateTxt) { lastDateTxt = dt; dateEl.textContent = dt; }
+    }
     var E = null;
     try { E = g.QVViews && g.QVViews.eew; } catch (e) { }
     /* 自定义源兜底：官方链路没接管画面（中国卡 / 纯情报条目）时，左卡仍显示最新事件 */
     if (!E) { try { E = g.QVCustomSrc && g.QVCustomSrc.display(); } catch (e) { } }
     if (!E) {
       if (lastSig !== '') { lastSig = ''; pushLog('事件结束 · 返回监听'); }
+      var wasEvent = lastCardKey !== 'IDLE';
       renderIdle();
-      renderScale(metricOf(null), null);
-      if (ledSim) ledSim.classList.remove('on');
-      if (ledCustom) ledCustom.classList.remove('on');
+      if (wasEvent) renderScale(metricOf(null), null);
+      if (ledSim && ledSim.classList.contains('on')) ledSim.classList.remove('on');
+      if (ledCustom && ledCustom.classList.contains('on')) ledCustom.classList.remove('on');
     } else {
       renderEvent(E);
     }
     if (ledCustom) {
       var cOn = false;
       try { cOn = !!(g.QVCustomSrc && g.QVCustomSrc.status().on); } catch (e) { }
-      ledCustom.classList.toggle('on', cOn);
+      if (ledCustom.classList.contains('on') !== cOn) ledCustom.classList.toggle('on', cOn);
     }
-    var ab = root.querySelector('[data-zq="auto"]');
-    if (ab) {
+    if (!autoBtn) autoBtn = root.querySelector('[data-zq="auto"]');
+    if (autoBtn) {
       var on = true;
       try { on = g.QVMapCam && g.QVMapCam.isAutoCam ? !!g.QVMapCam.isAutoCam() : true; } catch (e) { }
-      ab.classList.toggle('act', on);
-      ab.dataset.tip = on ? '自动镜头：开 / AUTO ON' : '自动镜头：关 / AUTO OFF';
+      if (autoBtn.classList.contains('act') !== on) autoBtn.classList.toggle('act', on);
+      var tipTxt = on ? '自动镜头：开 / AUTO ON' : '自动镜头：关 / AUTO OFF';
+      if (autoBtn.dataset.tip !== tipTxt) autoBtn.dataset.tip = tipTxt;
     }
-    var boot = document.getElementById('boot');
-    if (!boot || boot.hidden) root.classList.add('ready');
+    if (!bootEl) bootEl = document.getElementById('boot');
+    if ((!bootEl || bootEl.hidden) && !root.classList.contains('ready')) root.classList.add('ready');
   }
   function openCfg() {
     var dlg = document.getElementById('qvdialog');
@@ -605,7 +628,7 @@
     try { if (g.QVCustomSrc) g.QVCustomSrc.boot(); } catch (e) { }
     refreshSrcStatus();
     tick();
-    setInterval(tick, 220);
+    setInterval(tick, 400);
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();
