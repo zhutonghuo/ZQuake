@@ -1,0 +1,19 @@
+# ---- 本地调试截图 / 临时产物（不进公开仓库）----
+_shot_*.png
+_zq_*.png
+_test_*
+_smoke_*
+_旧版重建*/
+_askpass.cmd
+*.log
+
+# ---- 本机专用脚本（含本机路径，对他人无意义）----
+startserver.bat
+kill_old_server.ps1
+卸载IDM残留.bat
+
+# ---- 系统 / 编辑器 ----
+.DS_Store
+Thumbs.db
+__pycache__/
+*.pyc

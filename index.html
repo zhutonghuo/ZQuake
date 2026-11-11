@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+
+<meta name="description" content="ZQuake模拟器——地震速报模拟器：紧急地震速报多报序列、测站实时检测、P/S 波前、震度/烈度涂色、中国地市与日本区域分界线，官方音效；仅本地模拟，不接入任何真实数据源。">
+<meta name="keywords" content="ZQuake,ZQuake模拟器,地震,紧急地震速报,EEW,震度,烈度,海啸,地震预警,模拟器">
+<meta name="theme-color" content="#050b12">
+<meta name="color-scheme" content="dark">
+<meta name="robots" content="index,follow">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="ZQUAKE 地震观测台">
+<meta property="og:title" content="ZQUAKE · 地震观测台">
+<meta property="og:description" content="ZQUAKE 地震观测台——多报序列、测站检测、震度烈度涂色、波前推演与区域分界线；支持实时速报与本地模拟。">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="ZQUAKE · 地震观测台">
+<meta name="twitter:description" content="ZQUAKE 地震观测台——实时速报与地震模拟可视化。">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'self' data: blob:; img-src 'self' data: blob: https: http://127.0.0.1:* http://localhost:*; connect-src 'self' https: http: wss: ws:; style-src 'self' 'unsafe-inline'; script-src 'self'">
+<title>ZQUAKE · 地震观测台</title>
+<link rel="stylesheet" href="css/app.css?v=20261108a">
+<link rel="stylesheet" href="css/zq.css?v=20261111d">
+<script src="js/boot-progress.js?v=20261031a"></script>
+
+<script src="js/pack-boot.js?v=20261111c"></script>
+</head>
+<body>
+
+<!-- ★★★ 2026-10-28 自绘标题栏（KonS 同款）——仅 Electron 显示，网页版由 titlebar.js 保持 hidden -->
+<div id="qvtitlebar" hidden>
+  <div class="tb-left">
+    <span class="tb-mark">ZQuake</span><span class="tb-sub">地震模拟器</span>
+  </div>
+  <div class="tb-btns">
+    <button type="button" id="tbMin" class="tb-btn" title="最小化" aria-label="最小化">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><line x1="6" y1="12" x2="18" y2="12"/></svg>
+    </button>
+    <button type="button" id="tbMax" class="tb-btn" title="最大化" aria-label="最大化">
+      <svg class="i-max" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
+      <svg class="i-rest" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="5" y="8" width="11" height="11" rx="1.5"/><path d="M8 5h9.5A1.5 1.5 0 0 1 19 6.5V16"/></svg>
+    </button>
+    <button type="button" id="tbClose" class="tb-btn tb-close" title="关闭" aria-label="关闭">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+    </button>
+  </div>
+</div>
+
+<div id="boot">
+  <div class="boot-bg" aria-hidden="true">
+    <span class="ripple"></span><span class="ripple"></span><span class="ripple"></span>
+  </div>
+  <div class="bstage" id="bstage">
+    <section class="bside-left">
+      <div class="boot-card">
+        <div class="boot-brand">
+          <span class="boot-logo"></span>
+          <span class="boot-brand-text">
+            <span class="boot-name">ZQUAKE</span>
+            <span class="boot-tag">SEISMIC OBSERVATORY · 地震观测台</span>
+          </span>
+        </div>
+        <div class="boot-status-row">
+          <span class="dot" id="bootDot"></span>
+          <span id="bootStatus">正在下载资源包 · 首次约需 1 分钟</span>
+        </div>
+        <div class="boot-progress">
+          <div class="boot-pct"><span id="bootPct">0</span><span class="unit">%</span></div>
+          <div class="boot-mb"><span id="bootMbNow">0.0</span> / <span id="bootMbTotal">19.4</span> MB</div>
+          <div class="bar"><div class="bar-fill" id="bootBar"></div></div>
+        </div>
+        <div class="now" id="bootNow">资源包 20MB · 首次加载后浏览器会缓存，下次秒开</div>
+        <button type="button" id="bootSkip" class="boot-skip">跳过加载，直接进 →</button>
+      </div>
+      <ul class="blog" id="bootlog"></ul>
+    </section>
+    <section class="bside-right">
+      <div class="game-card">
+        <div class="sn-bar">
+          <span class="sn-score" id="snScore">0</span>
+          <button class="sn-btn" id="snRestart">RESTART</button>
+          <span class="sn-best" id="snBest">HI: 0</span>
+        </div>
+        <div class="board-wrap" id="snWrap">
+          <canvas id="snBoard" width="400" height="400"></canvas>
+        </div>
+        <p class="hint">方向键 / 滑动 开始 · 空格 或 RESTART 重开</p>
+      </div>
+    </section>
+  </div>
+</div>
+<div id="err" hidden><h1>错误</h1><pre id="errmsg"></pre></div>
+
+<div id="stage" hidden>
+  <div id="map"></div>
+  <div id="art"></div>
+  <div id="zh"></div>
+  <div id="txt"></div>
+  <div id="chrome"></div>
+</div>
+
+<div id="zq-ui-host" hidden></div>
+<script src="js/format.js?v=20261031a"></script>
+<!-- ★ 2026-10-28 自绘标题栏：网页版内部直接 return，不产生任何副作用 -->
+<script defer src="js/titlebar.js?v=20261031a"></script>
+<script defer src="js/costumes.js?v=20261031a"></script>
+<script defer src="js/maptiles.js?v=20261031a"></script>
+<script defer src="js/shindo-areas2.js?v=20261031a"></script>
+<script defer src="js/stations.js?v=20261031a"></script>
+<script defer src="js/cn-stations.js?v=20261031a"></script>
+<script defer src="js/cn-areas.js?v=20261031a"></script>
+<script defer src="js/stennet.js?v=20261031a"></script>
+<script defer src="js/shindo.js?v=20261031a"></script>
+<script defer src="js/audio.js?v=20261031b"></script>
+<script defer src="js/barsvg.js?v=20261031a"></script>
+<script defer src="js/layout.js?v=20261031c"></script>
+<script defer src="js/glyphs.js?v=20261031a"></script>
+<script defer src="js/glyph-metrics.js?v=20261031a"></script>
+<script defer src="js/variants.js?v=20261031c"></script>
+<script defer src="js/view3art.js?v=20261031a"></script>
+<script defer src="js/view2art.js?v=20261031a"></script>
+<script defer src="js/tsu-areas.js?v=20261031a"></script>
+<script defer src="js/coast-geo.js?v=20261031a"></script>
+<script defer src="js/coast-cn.js?v=20261031a"></script>
+<script defer src="js/coast-base.js?v=20261031a"></script>
+<script defer src="js/tsu-coast.js?v=20261031a"></script>
+<script defer src="js/slots-table.js?v=20261031a"></script>
+<script defer src="js/zh.js?v=20261031a"></script>
+<script defer src="js/texts.js?v=20261031a"></script>
+<script defer src="js/liedu.js?v=20261031a"></script>
+<script defer src="js/render3.js?v=20261104a"></script>
+<script defer src="js/vs30-grid.js?v=20261031a"></script>
+<script defer src="js/vs30.js?v=20261031a"></script>
+<!-- ★ 2026-10-28 场地格点精度向导/设置（仅桌面版生效） -->
+<script defer src="js/vs30-ui.js?v=20261031a"></script>
+<!-- ★ 2026-10-26 中国专用算法（GB 18306-2015 表 1 分区烈度衰减）+ 中国历史地震目录
+     ⚠️ 必须排在 views.js 之前：genStations() 里直接读 window.QVCNGM -->
+<script defer src="js/cn-gmpe.js?v=20261031a"></script>
+<!-- ★ 2026-10-28 区域走时修正（CRUST1.0 实测 k 表）：青藏/新疆/川滇/台湾
+     ⚠️ 必须排在 views.js 与 mapcam.js 之前：测站到时和 P/S 波圈共用同一个 k -->
+<script defer src="js/travel-region.js?v=20261031a"></script>
+<script defer src="js/cn-quakes.js?v=20261031a"></script>
+<script defer src="js/world-quakes.js?v=20261031a"></script>
+<script defer src="js/views.js?v=20261104a"></script>
+<script defer src="js/replay.js?v=20261031a"></script>
+<script defer src="js/place-zh.js?v=20261031a"></script>
+<script defer src="js/data.js?v=20261104b"></script>
+<script defer src="js/hist.js?v=20261031a"></script>
+<script defer src="js/ws.js?v=20261031a"></script>
+<script defer src="js/realsrc.js?v=20261031a"></script>
+<!-- ★ 2026-10-28 P2PQuake v2（免费、无 key）：556 紧急地震速报，带 areas[].arrivalTime -->
+<script defer src="js/p2pquake.js?v=20261031a"></script>
+<script defer src="js/dmdata.js?v=20261031a"></script>
+<script defer src="js/dmdata-ui.js?v=20261031a"></script>
+<script defer src="js/qvtiles.js?v=20261031a"></script>
+<script defer src="js/planet.js?v=20261031a"></script>
+<script defer src="js/jma2001.js?v=20261031a"></script>
+<script defer src="js/badge.js?v=20261031a"></script>
+<script defer src="js/record.js?v=20261104a"></script>
+<script defer src="js/mapcam.js?v=20261111b"></script>
+<script defer src="js/hovpill.js?v=20261031a"></script>
+<script defer src="js/app.js?v=20261104a"></script>
+<!-- ★ 2026-11-11 自定义数据源：格式沿用现有归一化事件对象 / WOLF-X / P2P 原始 JSON -->
+<script defer src="js/customsrc.js?v=20261111d"></script>
+<script defer src="js/zq.js?v=20261111d"></script></body>
+</html>

@@ -1,0 +1,1664 @@
+/* ============================================================================
+   app.css — 只做布局容器。
+   界面图形（面板、图标、圆角、配色）全部来自官方 SVG 素材（assets/），
+   坐标来自官方运行时实测（js/layout.js）。这里**不重画任何面板**。
+   ========================================================================== */
+/* ★★ 官方文字层用的是 BIZ UDPGothic（日式哥特），但它没有简体字，项目里也没带字体文件。
+   对应中文 = 思源黑体 / Noto Sans SC（同源设计），所以用它跑中文层，
+   字骨架 / 字宽 / 字重都和官方一致。
+   字体由 dev/make-font.py 子集化：只包含应用源码里出现过的 2798 个字符（813KB）。
+
+   ★★ 2026-10-31：@font-face 整条从 CSS 移除，改由 js/pack-boot.js 在资源包就绪后
+   从内存 blob 动态注入（见该文件 patchFontFace）。
+   原因：CSS 的 url() 不走 fetch / <img>，是下载器拦截的盲区；写死相对路径会在
+   CSS 解析瞬间就发一次真实网络请求（font-display:swap 也拦不住），
+   浏览器扩展照样能把它抓走弹窗。改成 JS 注入后字体彻底零网络请求。
+   （不在 CSS 里留占位规则，避免浏览器尝试解码空 data URI 报
+    "Failed to decode downloaded font" 警告，并抢在注入规则之前生效。） */
+html, body {
+  margin: 0; padding: 0; width: 100%; height: 100%;
+  background: #000; overflow: hidden;
+  user-select: none; -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+[hidden] { display: none !important; }
+img { display: block; }
+
+/* ════════════════════════════════════════════════════════════════════
+   ★★★ 2026-10-30 用户：「app 版的顶部栏改成 iOS 深色，我要纯黑的」
+   —— iOS 深色导航栏口径：
+      · 底色 **#000 纯黑**（不透明、无渐变、无毛玻璃）
+      · 分隔线用 iOS 的 hairline：1px rgba(255,255,255,.08)
+      · 主标题 #fff、副标题与图标 #8e8e93（iOS systemGray）
+      · 按钮 hover 白色 12% 淡高亮，关闭键 hover 用 iOS 红 #ff453a
+        （以前是 Windows 的 #e81123）
+   ⚠️ 尺寸/结构（40px、左侧标题、右侧 46px 三按钮）与交互一个字没动
+   ⚠️ 只有 Electron 才 display:flex（titlebar.js 给 <body> 加 .shell）
+   ════════════════════════════════════════════════════════════════════ */
+#qvtitlebar {
+  position: fixed; left: 0; top: 0; right: 0; height: 40px; z-index: 200;
+  display: none; align-items: center; justify-content: space-between;
+  background: #000; border-bottom: 1px solid rgba(255, 255, 255, .08);
+  -webkit-app-region: drag; -webkit-user-select: none; user-select: none;
+  font-family: 'NotoSC', sans-serif;
+}
+body.shell #qvtitlebar { display: flex; }
+body.shell #boot, body.shell #err { top: 40px; }
+/* ★ 2026-10-30 全屏时标题栏必须收起（titlebar.js 会摘掉 .shell，这里再兜一层） */
+body.fs #qvtitlebar { display: none !important; }
+body.fs #boot, body.fs #err { top: 0; }
+
+#qvtitlebar .tb-left {
+  display: flex; align-items: baseline; gap: 8px; padding-left: 14px;
+  min-width: 0; overflow: hidden; white-space: nowrap;
+}
+#qvtitlebar .tb-mark { font-size: 13px; font-weight: 700; color: #fff; letter-spacing: .3px; }
+#qvtitlebar .tb-sub { font-size: 11px; font-weight: 400; color: #8e8e93; }
+
+#qvtitlebar .tb-btns { display: flex; height: 100%; -webkit-app-region: no-drag; }
+#qvtitlebar .tb-btn {
+  width: 46px; height: 100%; display: flex; align-items: center; justify-content: center;
+  background: transparent; border: 0; padding: 0; cursor: pointer;
+  color: #8e8e93; transition: background .15s ease, color .15s ease;
+}
+#qvtitlebar .tb-btn svg { width: 15px; height: 15px; }
+#qvtitlebar .tb-btn:hover { background: rgba(255, 255, 255, .12); color: #fff; }
+#qvtitlebar .tb-btn.tb-close:hover { background: #ff453a; color: #fff; }
+/* 最大化 / 还原 图标切换（与 KonS 同一个做法） */
+#qvtitlebar .tb-btn .i-rest { display: none; }
+#qvtitlebar .tb-btn.maximized .i-max { display: none; }
+#qvtitlebar .tb-btn.maximized .i-rest { display: block; }
+
+/* 地图：由 js/mapcam.js 按图块表动态生成
+   层序（官方同款）：
+     #mapocean  海洋轮廓（allocean，仅世界模式）
+     #mapworld  世界陆地（outsvg*）
+     #mapview   日本精细图（nb*）—— 官方【任何时候都盖在最上面】
+     #mappins   震中标记（不参与图集缩放，屏幕尺寸恒定）
+   ⚠️ 地图整体必须【在 UI 层之下】：官方把地図画在 pen 层，面板精灵永远盖住它。
+      之前 #mapview 写了 z-index:2 而 #art 是 auto → 地图压在侧栏上（用户报的「穿透左侧信息栏」）。 */
+/* 底色 = 自建地图的深海基色（kondz-map 的 SEA_RAMP[0] ≈ #09101C）。
+   自建瓦片模式下官方图层全部隐藏，瓦片没到时露的就是这个色 → 不会黑屏。 */
+#map { position: absolute; inset: 0; overflow: hidden; z-index: 0; background: #0a1119; }
+#mapview, #mapwlg, #mapworld, #mapocean, #mapsea, #mapcoast { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+/* ★ #maptiles = 自建瓦片金字塔（js/qvtiles.js）—— 【屏幕空间】层，不走 transform，
+   所以不需要官方的 reRaster 重栅格化；放大时直接换更高级别的瓦片 = 永远不会糊。
+   层序：盖在所有官方海/陆底图之上、官方 nb/nf 之下（nb/nf 一关就完全接管）。 */
+#maptiles { position: absolute; left: 0; top: 0; overflow: hidden; }
+/* 层序（官方同款：海洋 → 世界陆地(wlg，自带日本) → 震中标记）
+   #mapview = 日本视图用的官方 nb（含都道府県境，只在日本视图显示）
+   #mapwlg  = 官方广域档的全世界图（自带日本，无县境、海岸线一致）
+   #mapworld= 保留（outsvg 极缩档，当前不用） */
+#mapocean { z-index: 1; }
+#mapsea   { z-index: 1; }
+#mapworld { z-index: 2; }
+#mapwlg   { z-index: 3; }
+/* 自建瓦片（自带陆地 + 海底地形 + 行政区划线）：盖在官方底图之上 */
+#maptiles { z-index: 4; }
+/* 日本精细图（官方 nb）+ 海岸线（官方 nf）：任何模式都盖在世界图之上 */
+#mapview  { z-index: 5; }
+#mapcoast { z-index: 6; }
+/* ★ 我们自己的地图叠加层（震度色块 / 观测点）：与 #mapview 同一套 transform，
+   但**独立存在** —— 官方图层被隐藏时它不动。 */
+#mapoverlay { position: absolute; left: 0; top: 0; transform-origin: 0 0; z-index: 7; }
+
+/* ═══ 天体模式图层互斥（2026-11-03） ═══
+   切到月球/火星时，地球那几层必须彻底消失 —— 它们各自是独立 DOM 层，
+   只靠 JS 清数据不可靠（render3 每帧都可能重新填）。
+   这里直接按 #map.planet-mode 硬性隐藏，逻辑怎么跑都不会漏出来。
+     #mapcnareas 中国地级市色块 z=5
+     #mapisoline 等烈度线     z=7
+     #mapoverlay 震度色块/观测点 z=7 */
+#map.planet-mode #mapcnareas,
+#map.planet-mode #mapisoline,
+#map.planet-mode #mapoverlay { display: none !important; }
+/* 2026-10-20 user: "why does the shindo colour layer cover the P/S rings?"
+   #mapwaves and #mapoverlay are both z=7, and mapoverlay comes later in DOM order
+   -> it paints on top of the wave rings. Rings must sit above the fill, below pins. */
+#mapwaves { position: absolute; left: 0; top: 0; z-index: 8; }
+#mappins { z-index: 9; }
+/* 震中标记：官方是 pen 层最后盖章 → 必须在所有图块【之上】，但仍在 #map 内部（底下是 UI 层） */
+#mappins  { z-index: 8; }
+
+/* ★ UI 大小（设置页）= 给 #stage 套一层 #wrap，按视口中心缩放。
+   这样 app.js 里那套「居中 + 等比缩放」不用改，两者相乘即可。 */
+#wrap {
+  position: absolute; inset: 0;
+  transform-origin: 50% 50%;
+}
+
+/* 舞台：逻辑尺寸 = ceil(窗口/k)，**不小于设计尺寸 960x720**（由 app.js 的 layout() 实时写入）
+   ★★ 2026-10-11 官方同款自适应：不再「等比缩进窗口 + 居中信箱」，
+      而是把舞台拉大到窗口大小、整体 scale(k)、原点钉左上 →
+      多出来的宽/高全部给地图（#map 是 inset:0），永远不露黑边。 */
+#stage {
+  position: absolute; left: 0; top: 0;
+  width: 960px; height: 720px;       /* 初始值；实际尺寸由 layout() 写 */
+  /* ★★ 2026-10-11 用官方素材本身的原色：
+     官方那层页面底 `bgsq`（assets/eb20c9da….svg）= 纯 **#12151a**，
+     而且它的框只有 left:-408 / 648x728 → **只铺到 x≈240**：
+     官方面板（8..232）之外、地图之外的区域本来就是这种**近黑**。
+     以前我们写 #252f43（偏蓝灰），夹在深色底板和地图之间就是「黑了一块」
+     且和官方不一样。现按官方原色对齐。 */
+  background: #12151a;
+  transform-origin: 0 0;
+  overflow: hidden;
+}
+/* ★★ 官方同款自适应：左栏（x<240）在页面底片 `bgsq` 下沿（y=724）以下，
+   官方是**把 bgsq 竖向拉伸到整个舞台高度**（实测 960x720→728 / 1280x640→645 / 1440x900→908）。
+   我们的 #map 是 inset:0，窗口一高就会在左栏下方露出地图 → 这里补一条纯色盖住它。
+   z-index 2：在地图（0）之上、图形层（3）之下。 */
+#stage::before {
+  content: ''; position: absolute; left: 0; top: 724px; width: 248px; height: 100%;
+  background: #12151a; z-index: 2; pointer-events: none;
+}
+/* 横屏画面布局（把左栏让给地图）→ 左栏本身不存在了，遮罩也要关掉 */
+#stage.ls::before { display: none; }
+#art, #txt, #zh {
+  position: absolute; left: 0; top: 0;
+  width: 960px; height: 720px;
+}
+/* 面板/文字永远在地图之上（#txt 必须在 #zh 之上：履历徽章本体画在 #txt 层） */
+#art { z-index: 3; }
+#zh  { z-index: 4; }
+#txt { z-index: 5; }
+#txt, #zh { pointer-events: none; }
+
+/* ★★ 顶栏层：左侧 4 个视图图标(tabB/tabBs/tabBb*) + 时钟底(timebg0) + 地图 +/−/适配(FlZom0/FlFit0)
+   ⚠️ 用户报「第二、第三、第四页全部遮住了按钮」= 设置页的面板宽 291px，
+      把 242..274 的图标和 250..290 的缩放按钮全盖住了。
+      解决：这些「按钮类」元素从 #art 里搬出来，单独一层且 z-index 高于所有视图版面。 */
+#chrome { z-index: 7; }
+/* 视图版面层（调试页 / 设置页）：在图形层之上、顶栏层之下 */
+#view1, #view3 { z-index: 6; }
+#art, #zh, #txt { }
+#chrome, #view1, #view3 {
+  position: absolute; left: 0; top: 0;
+  width: 960px; height: 720px;
+}
+#chrome, #view1, #view3 { pointer-events: none; }
+
+/* 设置页（自己排版的中文版式：三档字号 head 22 / row 18 / note 15.5 由 JS 写入） */
+#view3 .qvrow { position: absolute; white-space: nowrap; line-height: 1; }
+#view3 .qvdim { color: #7d97b4; }
+#view1 .qvhead, #view3 .qvhead { color: #eaf0fa; }
+
+/* 轻提示（设置页动作反馈）
+   ★ 2026-10-21 用户：「这种类似的弹窗放到左下角」→ 再改：「要放在地图区域左下角（x 从 240 开始）」
+   ⇒ 左栏宽 240，提示框贴在地图区左下角（240+12 留一点内缩）；横屏（左栏隐藏）时回到 16。 */
+#qvtoast {
+  position: absolute; left: 252px; bottom: 16px;
+  z-index: 20; padding: 8px 16px; border-radius: 6px;
+  background: rgba(20,30,48,.94); color: #dce3ff;
+  font: 15px/1.2 'NotoSC',"Noto Sans SC","Source Han Sans SC","Microsoft YaHei UI","Microsoft YaHei",sans-serif;
+  border: 1px solid #31476d; opacity: 0; transition: opacity .18s;
+  pointer-events: none; white-space: nowrap;
+  max-width: 460px; overflow: hidden; text-overflow: ellipsis;
+}
+#stage.ls #qvtoast { left: 16px; }
+#qvtoast.on { opacity: 1; }
+
+/* 设置导出・导入 对话框 / 关于・素材授权 对话框（共用一套外观）
+   ★★ 2026-11-02 用户：「弹窗都应该自适应，应该始终居中，同时背景灰色」
+      病根：以前写的是 `position:absolute; left:0; top:0; width:960px; height:720px`，
+      挂在 #stage 里面 —— 而 #stage 的逻辑尺寸由 layout() 动态写到 960~1900px
+      不等，还整体 transform: scale(k)。⇒ 舞台一大，遮罩只盖住左上角 960×720，
+      弹窗也只居中于那一小块，看着就「偏左上 + 右边地图没变灰」。
+      改成 fixed 全屏 + 挂到 <body>（见 views.js 的 appendChild），
+      尺寸恒等于视口、居中于真实窗口、不跟 UI 缩放跑。 */
+#qvdialog, #qvabout {
+  position: fixed; inset: 0;
+  z-index: 21; display: none; background: rgba(4,8,16,.66);
+}
+#qvdialog.on, #qvabout.on { display: block; }
+
+/* ═══ 切换星球弹窗（2026-11-03） ═══
+   与 #qvabout 同一套骨架：fixed 全屏 + 挂 body（不吃 #stage 的 scale）。 */
+#qvplanet {
+  position: fixed; inset: 0;
+  z-index: 21; display: none; background: rgba(4,8,16,.66);
+}
+#qvplanet.on { display: block; }
+#qvplanet .box {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
+  width: 520px; max-width: min(520px, 92vw); max-height: 90vh; overflow: auto;
+  padding: 18px; border-radius: 8px;
+  background: #1d2a41; border: 1px solid #31476d;
+  font: 15px/1.4 "Microsoft YaHei UI","Microsoft YaHei",sans-serif; color: #dce3ff;
+  box-shadow: 0 10px 30px rgba(0,0,0,.55);
+}
+#qvplanet .box h3 { margin: 0 0 8px; font-size: 18px; color: #eaf0fa; font-weight: 600; }
+#qvplanet .pnote { margin: 0 0 14px; font-size: 13.5px; color: #8ea3b8; }
+#qvplanet .plist { display: flex; flex-direction: column; gap: 8px; }
+#qvplanet .pcard {
+  padding: 11px 13px; border-radius: 6px; cursor: pointer;
+  background: #16233a; border: 1px solid #2a3d5c;
+  transition: background .12s, border-color .12s;
+}
+#qvplanet .pcard:hover { background: #1b2c48; border-color: #3d5580; }
+#qvplanet .pcard.on { background: #24405f; border-color: #5b82b8; }
+#qvplanet .pcard .pn {
+  font-size: 15.5px; color: #eaf0fa; font-weight: 600;
+  display: flex; align-items: center; gap: 7px;
+}
+#qvplanet .pcard .pm { margin-top: 3px; font-size: 12.5px; color: #93a7bf; line-height: 1.45; }
+#qvplanet .pdot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; }
+/* 烈度表现切换（等震环 / 六边形网格）——只在天体模式显示 */
+#qvplanet .pseg {
+  display: flex; align-items: center; gap: 8px; margin-top: 12px;
+  padding-top: 12px; border-top: 1px solid #2a3d5c;
+}
+#qvplanet .pseg .seglab { font-size: 13px; color: #8ea3b8; margin-right: auto; }
+#qvplanet .pseg button {
+  margin: 0; padding: 5px 14px; font-size: 13px;
+  background: #16233a; border: 1px solid #2a3d5c; color: #a9bcd4;
+}
+#qvplanet .pseg button.on { background: #24405f; border-color: #5b82b8; color: #eaf0fa; }
+#qvplanet .pseg button:hover { background: #1b2c48; }
+#qvplanet .btns { margin-top: 14px; text-align: right; }
+#qvplanet button {
+  margin-left: 8px; padding: 7px 16px; border-radius: 6px; cursor: pointer;
+  background: #31476d; color: #eaf0fa; border: 1px solid #456; font-size: 14px;
+}
+#qvplanet button:hover { background: #3d5580; }
+#qvdialog .box, #qvabout .box {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
+  width: 620px; max-width: min(620px, 92vw); max-height: 90vh; overflow: auto;
+  padding: 18px; border-radius: 8px;
+  background: #1d2a41; border: 1px solid #31476d;
+  font: 15px/1.4 "Microsoft YaHei UI","Microsoft YaHei",sans-serif; color: #dce3ff;
+}
+/* ★★★ 2026-10-25 用户：「这个应该用深色模式的条」
+   —— 弹窗（关于・导出导入・切换星球・模拟设置）的滚动条默认是系统浅色，
+      在深色底上非常刹眼。统一换成深色轨道 + 蓝灰把手（与下拉菜单 #qvcycmenu 同色系）。 */
+#qvdialog .box, #qvabout .box, #qvplanet .box {
+  scrollbar-width: thin;
+  scrollbar-color: #45608c #162033;
+}
+#qvdialog .box::-webkit-scrollbar, #qvabout .box::-webkit-scrollbar,
+#qvplanet .box::-webkit-scrollbar { width: 8px; height: 8px; }
+#qvdialog .box::-webkit-scrollbar-track, #qvabout .box::-webkit-scrollbar-track,
+#qvplanet .box::-webkit-scrollbar-track { background: #162033; border-radius: 4px; }
+#qvdialog .box::-webkit-scrollbar-thumb, #qvabout .box::-webkit-scrollbar-thumb,
+#qvplanet .box::-webkit-scrollbar-thumb {
+  background: #45608c; border-radius: 4px; border: 2px solid #162033;
+}
+#qvdialog .box::-webkit-scrollbar-thumb:hover, #qvabout .box::-webkit-scrollbar-thumb:hover,
+#qvplanet .box::-webkit-scrollbar-thumb:hover { background: #5a7cb0; }
+#qvabout .box h3 { margin: 0 0 10px; font-size: 18px; color: #eaf0fa; font-weight: 600; }
+#qvabout .box p { margin: 0 0 8px; }
+#qvabout .box ul { margin: 0 0 8px; padding-left: 20px; color: #a9bcd4; font-size: 14px; }
+#qvabout .box code { color: #dce3ff; font-family: Consolas, monospace; font-size: 13px; }
+#qvdialog textarea {
+  margin-top: 10px; width: 100%; height: 240px; box-sizing: border-box;
+  background: #101a2b; color: #dce3ff; border: 1px solid #31476d; border-radius: 6px;
+  font: 13px/1.45 Consolas, monospace; padding: 8px; resize: none;
+}
+#qvdialog .btns, #qvabout .btns { margin-top: 12px; text-align: right; }
+#qvdialog button, #qvabout button {
+  margin-left: 8px; padding: 7px 16px; border-radius: 6px; cursor: pointer;
+  background: #31476d; color: #eaf0fa; border: 1px solid #456; font-size: 14px;
+}
+#qvdialog button:hover, #qvabout button:hover { background: #3d5580; }
+
+/* ═══ 模拟设置（2026-10-26 用户设计稿：灰黑紧凑版 · 双栏向导） ═══
+   布局：左栏 = 三步向导（基础参数 / 预警与数据源 / 模拟环境），
+         左栏第二视图 = 自定义海啸情报编辑器，
+         右栏 = 实时摘要看板（随左侧设置即时刷新）+ 重新选点 / 自定义海啸情报。
+   ⚠️ 只换外观与布局，**参数项全部保持 koneew 的完整版**
+      （断层 5 类、倒计时 5 档、时间加速 10 档、JMA/USGS、沿岸区域表格…设计稿里砍掉的项不照搬）。 */
+#qvsim {
+  /* ★ 2026-11-02 同上：fixed 全屏（挂 body），不再写死 960×720 */
+  position: fixed; inset: 0;
+  z-index: 22; display: none; background: rgba(0, 0, 0, .66);
+}
+#qvsim.on { display: block; }
+#qvsim * { box-sizing: border-box; }
+
+/* 天体模式「摇晃时间」提示条（2026-11-03）
+   地球模式整条隐藏；火星/月球模式下常驻在「基础参数」下面，随 M 实时变化。
+   超过该天体有记录最强震级 → 变红，提示「已超越真实物理极限 / 科幻模式」。 */
+#qvsim .shakebar {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  margin: 2px 0 4px; padding: 9px 13px; border-radius: 5px;
+  background: #2a2118; border: 1px solid #4a3a26;
+  font-size: 13px; line-height: 1.45; color: #d8c3a5;
+}
+#qvsim .shakebar[hidden] { display: none; }
+#qvsim .shakebar b { color: #f0c78a; font-weight: 600; }
+#qvsim .shakebar span { color: #a89579; }
+#qvsim .shakebar.over { background: #331a1a; border-color: #6d3030; }
+#qvsim .shakebar.over b { color: #ff8f7a; }
+#qvsim .shakebar.over span { color: #c98f85; }
+#qvsim .box {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: 880px; max-width: min(880px, 94vw); height: 620px; max-height: 92vh;
+  display: flex; flex-direction: column;
+  background: #1e1e1e; border: 1px solid #333333; border-radius: 8px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, .7); overflow: hidden;
+  font: 14px/1.45 "Microsoft YaHei UI", "Microsoft YaHei", sans-serif; color: #f3f4f6;
+}
+/* ── 标题栏 ── */
+#qvsim .mhead {
+  flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 20px; background: rgba(0, 0, 0, .2); border-bottom: 1px solid #333333;
+}
+#qvsim .mhead h3 {
+  margin: 0; font-size: 16px; font-weight: 800; color: #f3f4f6;
+  display: flex; align-items: center; gap: 9px;
+}
+#qvsim .mhead h3 svg {
+  width: 18px; height: 18px; fill: none; stroke: #3b82f6;
+  stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+}
+#qvsim .mhead .x {
+  background: none; border: none; color: #9ca3af; font-size: 22px; line-height: 1;
+  cursor: pointer; padding: 0; margin: 0;
+}
+#qvsim .mhead .x:hover { color: #f3f4f6; }
+
+/* ── 主体：左向导 / 右摘要 ── */
+#qvsim .simbody { flex: 1; min-height: 0; display: flex; position: relative; }
+
+#qvsim .leftpane { flex: 7.3; position: relative; border-right: 1px solid #333333; min-width: 0; }
+#qvsim .vlayer {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  background: #1e1e1e; opacity: 0; pointer-events: none; transform: translateX(-14px);
+  transition: transform .3s cubic-bezier(.34, 1.4, .64, 1), opacity .25s;
+}
+#qvsim .vlayer.on { opacity: 1; pointer-events: auto; transform: none; }
+/* 海啸编辑器是第二视图，铺满整个主体（表格需要宽度）→ 压在左右两栏之上 */
+#qvsim #svTsu { z-index: 4; }
+
+/* 进度条 */
+#qvsim .sprogress { flex: 0 0 auto; display: flex; gap: 6px; padding: 18px 22px 8px; }
+#qvsim .sprogress i { flex: 1; height: 6px; border-radius: 4px; background: #333333; transition: background .3s; }
+#qvsim .sprogress i.on { background: #3b82f6; }
+
+#qvsim .sbody { position: relative; flex: 1; min-height: 0; }
+#qvsim .spanel {
+  position: absolute; inset: 0; padding: 8px 22px 6px;
+  display: none; flex-direction: column; gap: 14px; overflow-y: auto;
+}
+#qvsim .spanel.on { display: flex; animation: qvsimStepIn .3s ease; }
+@keyframes qvsimStepIn { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: none; } }
+#qvsim .spanel::-webkit-scrollbar { width: 6px; }
+#qvsim .spanel::-webkit-scrollbar-thumb { background: #444444; border-radius: 3px; }
+
+#qvsim .ptitle { font-size: 18px; font-weight: 800; letter-spacing: .01em; }
+#qvsim .fld { display: flex; flex-direction: column; gap: 6px; }
+#qvsim .fld.row2 { flex-direction: row; gap: 12px; }
+#qvsim .fld.row2 > div { flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+#qvsim .flabel { font-size: 12.5px; font-weight: 700; color: #9ca3af; }
+
+/* ── 表单基础件 ── */
+#qvsim input, #qvsim select, #qvsim textarea {
+  width: 100%; box-sizing: border-box; margin: 0; outline: none;
+  background: #121212; color: #f3f4f6; border: 1px solid #333333; border-radius: 6px;
+  padding: 10px 11px; font: 13px/1.35 "Microsoft YaHei", sans-serif;
+}
+#qvsim input:focus, #qvsim select:focus, #qvsim textarea:focus { border-color: #3b82f6; }
+/* ★ 2026-10-26 自定义时间填错格式：红边提示（不弹窗打断） */
+#qvsim input.bad { border-color: #ef4444 !important; }
+#qvsim input::placeholder, #qvsim textarea::placeholder { color: #555555; font-weight: 600; }
+#qvsim textarea { font: 12px/1.5 Consolas, monospace; resize: none; }
+
+/* 滑块 + 数字框 */
+#qvsim .slider-group {
+  display: flex; align-items: center; gap: 12px;
+  background: #121212; border: 1px solid #333333; border-radius: 6px;
+  padding: 10px 14px; box-shadow: inset 0 2px 4px rgba(0, 0, 0, .5);
+}
+#qvsim .slider-group input[type=range] { flex: 1; padding: 0; border: none; }
+/* ★ 2026-10-26 用户：「我说的是差了刻度线」→ 滑块轨道下方补一排刻度线。
+   轨道外面套 .range-wrap，::after 用 repeating-linear-gradient 每 10% 画一根
+   1px × 4px 的短竖线（10 等分，两端也有）。 */
+#qvsim .range-wrap { position: relative; flex: 1; min-width: 0; padding-bottom: 9px; }
+#qvsim .range-wrap input[type=range] { display: block; width: 100%; }
+/* 刻度带左右各内缩 6px（= 圆点半径），让刻度与圆点的实际行程对齐；
+   第二层是右端那根刻度（repeating 每 10% 只会画到 90%）。 */
+#qvsim .range-wrap::after {
+  content: ''; position: absolute; left: 6px; right: 6px; bottom: 0; height: 4px;
+  background-image:
+    linear-gradient(90deg, #5b616b 0, #5b616b 100%),
+    repeating-linear-gradient(90deg,
+      #5b616b 0, #5b616b 1px, transparent 1px, transparent 10%);
+  background-repeat: no-repeat, repeat-x;
+  background-position: right 0, left 0;
+  background-size: 1px 100%, auto 100%;
+  pointer-events: none;
+}
+/* ★★★ 2026-10-26 用户：「深度滑块范围应该分段 0-50 / 50-160 / 160-700」
+   深度滑块是 0~300 的【位置】，三段各占 1/3 宽。
+   ⚠️ 段内**不画灰色刻度带**（用户：「说的是你这个破灰线」）→ ::after 直接关掉；
+      只保留 ::before 的四根段分割线：0% / 33.3% / 66.7% / 100%。
+   ⚠️ 注意：gradient 的色标里不要用 calc(100% / 12) 这类【除法】——
+      实测这个 Chromium 会判非法、整条 background-image 被丢掉，
+      于是退回上一条规则的 size（auto 100%）→ 把 1px 刻度拉成整条实心灰。 */
+#qvsim .range-wrap.seg3::after { display: none; }
+#qvsim .range-wrap.seg3::before {
+  content: ''; position: absolute; left: 6px; right: 6px; bottom: 0; height: 6px;
+  z-index: 1; pointer-events: none;
+  background-image: linear-gradient(90deg,
+    #7b8494 0, #7b8494 1px,
+    transparent 1px, transparent calc(33.333% - 1px),
+    #7b8494 calc(33.333% - 1px), #7b8494 33.333%,
+    transparent 33.333%, transparent calc(66.666% - 1px),
+    #7b8494 calc(66.666% - 1px), #7b8494 66.666%,
+    transparent 66.666%, transparent calc(100% - 1px),
+    #7b8494 calc(100% - 1px), #7b8494 100%);
+  background-repeat: no-repeat;
+}
+/* ★ 2026-10-28 发报频率调节 = 4 个【档位】（不发报 / 默认 / 快速 / 密集）
+   —— 和深度滑块不同：深度是「3 个区间」，要画 4 根边界线；
+      而这个是 4 个离散档位、滑块只会停在 4 个点上，所以刻度要画 **4 根**，
+      位置 = 33.333% 三等分（0% / 33.3% / 66.7% / 100%）。
+   ⚠️ 之前画成 0/25/50/75/100 五根（= 4 段的边界）是错的。 */
+#qvsim .range-wrap.seg4::after { display: none; }
+#qvsim .range-wrap.seg4::before {
+  content: ''; position: absolute; left: 6px; right: 6px; bottom: 0; height: 6px;
+  z-index: 1; pointer-events: none;
+  background-image: linear-gradient(90deg,
+    #7b8494 0, #7b8494 1px,
+    transparent 1px, transparent calc(33.333% - 1px),
+    #7b8494 calc(33.333% - 1px), #7b8494 33.333%,
+    transparent 33.333%, transparent calc(66.666% - 1px),
+    #7b8494 calc(66.666% - 1px), #7b8494 66.666%,
+    transparent 66.666%, transparent calc(100% - 1px),
+    #7b8494 calc(100% - 1px), #7b8494 100%);
+  background-repeat: no-repeat;
+}
+/* 数字框：**两行等宽**（上下的框左右边缘对齐）+ 内容居中 + 单位紧跟
+   规模 = 「规模 M 6.5」，深度 = 「深度 700 km」 */
+#qvsim .sval-wrap {
+  flex: 0 0 120px; width: 120px;
+  display: flex; align-items: center; justify-content: center; gap: 5px;
+  padding: 6px 8px; border-radius: 4px;
+  background: rgba(255, 255, 255, .03); border: 1px solid #333333;
+}
+#qvsim .sval-wrap input[type=number] {
+  flex: 0 0 40px; width: 40px; padding: 0; margin: 0; border: none; background: none;
+  text-align: center; font-size: 15px; font-weight: 800; color: #f59e0b;
+}
+#qvsim .sval-wrap .unit {
+  flex: 0 0 auto; font-size: 11.5px; font-weight: 700; color: #8b929a;
+  line-height: 1; white-space: nowrap;
+}
+/* 名称前缀（规模 M / 深度）：比单位略亮一点，和数字区分开 */
+#qvsim .sval-wrap .unit.pre { color: #c9d1db; }
+#qvsim input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
+/* ★ 2026-10-26 用户：「滑块有点太单独了」→ 改参照 SREV（Scratch/TurboWarp）的设置页滑块：
+   轨道已选段用主色一直填到旋钮，旋钮是 12px 实心小圆点（无白底、无描边），贴在填充末端。
+   填充比例由 JS 写入 --p（0~100%）。 */
+#qvsim input[type=range] {
+  -webkit-appearance: none; appearance: none;
+  height: 6px; padding: 0; margin: 0; border: none; border-radius: 3px;
+  background: linear-gradient(90deg,
+    #3b82f6 0%, #3b82f6 var(--p, 0%),
+    #444444 var(--p, 0%), #444444 100%);
+}
+#qvsim input[type=range]::-webkit-slider-runnable-track {
+  height: 6px; border-radius: 3px; background: transparent;
+}
+#qvsim input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 12px; height: 12px; margin-top: -3px;
+  border-radius: 50%; background: #e8edf5; border: none; box-shadow: none; cursor: grab;
+}
+#qvsim input[type=range]:active::-webkit-slider-thumb { background: #ffffff; cursor: grabbing; }
+
+/* 选项按钮网格 */
+#qvsim .btn-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+#qvsim .btn-grid.cols-2 { grid-template-columns: 1fr 1fr; }
+#qvsim .option-btn {
+  background: #121212; border: 1px solid #333333; border-radius: 6px;
+  padding: 10px 6px; cursor: pointer; text-align: center; user-select: none;
+  font-size: 12.5px; font-weight: 700; color: #9ca3af;
+  box-shadow: 0 2px 0 #333333; transition: color .15s, border-color .15s, background .15s;
+}
+#qvsim .option-btn:active { transform: translateY(2px); box-shadow: none; }
+#qvsim .option-btn.on {
+  color: #3b82f6; border-color: #3b82f6; background: rgba(59, 130, 246, .12);
+  box-shadow: 0 2px 0 #2563eb;
+}
+/* ═══ 数据源选项卡（2026-10-26：带卡片素材的预览卡） ═══
+   左边一张迷你卡 = 色块 + 大号数字（震度用官方 paSc/snd，烈度用 QV_LIEDU 同族素材），
+   右边两行文字。选中态沿用 .option-btn.on 的蓝框。 */
+#qvsim .srcgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+#qvsim .option-btn.srccard {
+  display: flex; align-items: center; justify-content: flex-start; gap: 12px;
+  padding: 9px 12px; text-align: left;
+}
+#qvsim .srccard .srcpic {
+  position: relative; flex: 0 0 84px; width: 84px; height: 42px;
+  border-radius: 5px; overflow: hidden; background: #0b0b0b;
+}
+#qvsim .srccard .srcpic .blk,
+#qvsim .srccard .srcpic .num { position: absolute; display: block; }
+#qvsim .srccard .srcpic .blk { inset: 0; width: 100%; height: 100%; }
+#qvsim .srccard .srcpic .num {
+  left: 50%; top: 50%; width: 26px; height: 26px; transform: translate(-50%, -50%);
+}
+#qvsim .srccard .srctxt { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+#qvsim .srccard .srctxt b { font-size: 13.5px; font-weight: 800; color: #9ca3af; }
+#qvsim .srccard .srctxt span {
+  font-size: 10.5px; font-weight: 600; color: #6b7280; white-space: nowrap;
+}
+#qvsim .srccard.on .srctxt b { color: #3b82f6; }
+/* ★ 2026-10-26 智能识别卡：整行 + 两张色块各占一半（表示两套卡它都能出） */
+#qvsim .option-btn.srccard.wide { grid-column: 1 / -1; }
+#qvsim .srccard .srcpic.duo { display: flex; }
+#qvsim .srccard .srcpic.duo img {
+  position: static; inset: auto; width: 50%; height: 100%;
+  object-fit: cover; flex: 0 0 50%;
+}
+#qvsim .srccard .srcpic.duo img:last-of-type { border-left: 1px solid rgba(0, 0, 0, .55); }
+
+/* 开关卡（触发海啸预警 / 误报取消） */
+#qvsim .switch-group { display: flex; gap: 10px; }
+#qvsim .switch-card {
+  flex: 1; display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  background: #121212; border: 1px solid #333333; border-radius: 6px;
+  padding: 12px 14px; cursor: pointer; user-select: none; transition: border-color .2s;
+}
+#qvsim .switch-card.on { border-color: #3b82f6; }
+#qvsim .switch-text { font-size: 13px; font-weight: 700; }
+#qvsim .switch { position: relative; flex: 0 0 40px; width: 40px; height: 22px; }
+#qvsim .switch input {
+  position: absolute; opacity: 0; width: 0; height: 0;
+  margin: 0; padding: 0; border: 0; background: none;
+}
+#qvsim .slider-switch {
+  position: absolute; inset: 0; background: #444444; border-radius: 22px;
+  transition: background .2s;
+}
+#qvsim .slider-switch::after {
+  content: ''; position: absolute; left: 3px; top: 3px; width: 16px; height: 16px;
+  border-radius: 50%; background: #9ca3af; transition: transform .2s, background .2s;
+}
+#qvsim .switch input:checked + .slider-switch { background: #3b82f6; }
+#qvsim .switch input:checked + .slider-switch::after { transform: translateX(18px); background: #ffffff; }
+
+/* ── 左栏底部：上一步 / 下一步（末步=开始模拟） ── */
+#qvsim .sfoot {
+  flex: 0 0 auto; display: flex; gap: 10px;
+  padding: 14px 22px 16px; border-top: 1px solid #333333; background: #1e1e1e;
+}
+#qvsim .btn-prev, #qvsim .btn-next {
+  padding: 11px 16px; border-radius: 6px; border: none; cursor: pointer;
+  font-size: 14px; font-weight: 800; font-family: inherit; transition: transform .1s, box-shadow .1s;
+}
+#qvsim .btn-prev { flex: 1; background: #333333; color: #f3f4f6; box-shadow: 0 3px 0 #111111; }
+#qvsim .btn-prev:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; }
+#qvsim .btn-next { flex: 2; background: #3b82f6; color: #ffffff; box-shadow: 0 3px 0 #2563eb; }
+#qvsim .btn-next.finish { background: #10b981; box-shadow: 0 3px 0 #059669; }
+#qvsim .btn-prev:active:not(:disabled), #qvsim .btn-next:active { transform: translateY(3px); box-shadow: none; }
+
+/* ── 第二视图：自定义海啸情报编辑器 ── */
+#qvsim .ehead {
+  flex: 0 0 auto; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  padding: 16px 22px 10px; border-bottom: 1px solid #333333;
+}
+#qvsim .etitle { font-size: 16px; font-weight: 800; }
+#qvsim .esub { font-size: 11.5px; font-weight: 600; color: #6b7280; }
+#qvsim .ecount { margin-left: auto; font-size: 11.5px; font-weight: 700; color: #ef4444; }
+#qvsim .ebody {
+  flex: 1; min-height: 0; overflow-y: auto; padding: 14px 22px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+#qvsim .ebody::-webkit-scrollbar { width: 6px; }
+#qvsim .ebody::-webkit-scrollbar-thumb { background: #444444; border-radius: 3px; }
+#qvsim .row3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+#qvsim .mini { display: flex; flex-direction: column; gap: 5px; font-size: 11.5px; font-weight: 700; color: #9ca3af; }
+#qvsim .mini > input, #qvsim .mini > select { padding: 7px 8px; font-size: 12.5px; }
+
+#qvsim .tsulist { display: flex; flex-direction: column; gap: 6px; }
+#qvsim .tsurow { display: grid; grid-template-columns: 48px 1.25fr 100px 56px 1.1fr 46px 26px; gap: 6px; align-items: center; }
+#qvsim .tsurow input, #qvsim .tsurow select { padding: 6px 7px; font-size: 12px; font-weight: 600; }
+#qvsim .tsurow .del {
+  width: 26px; height: 26px; padding: 0; line-height: 1; font-size: 15px;
+  background: rgba(239, 68, 68, .1); border: 1px solid #ef4444; color: #ef4444; border-radius: 4px;
+  cursor: pointer;
+}
+#qvsim .tsurow .del:hover { background: #ef4444; color: #ffffff; }
+#qvsim .tsubtns { display: flex; align-items: center; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
+#qvsim .tsubtns .grow { flex: 1; }
+#qvsim .mini-btn {
+  padding: 6px 12px; border-radius: 4px; cursor: pointer;
+  font-size: 12px; font-weight: 700; font-family: inherit;
+  background: transparent; color: #9ca3af; border: 1px solid #333333;
+}
+#qvsim .mini-btn:hover { background: #333333; color: #f3f4f6; }
+#qvsim .mini-btn.pri { background: #3b82f6; border-color: #3b82f6; color: #ffffff; font-weight: 800; }
+#qvsim .mini-btn.pri:hover { background: #2563eb; border-color: #2563eb; }
+#qvsim .mini-btn.warn { color: #ef4444; border-color: rgba(239, 68, 68, .5); }
+#qvsim .mini-btn.warn:hover { background: rgba(239, 68, 68, .15); color: #ef4444; }
+#qvsim .pastewrap { display: none; margin-top: 6px; }
+#qvsim .pastewrap textarea { height: 78px; }
+#qvsim .pbtns { display: flex; gap: 8px; margin-top: 8px; }
+
+/* ── 右栏：实时摘要看板 ── */
+#qvsim .rightpane {
+  flex: 2.7; min-width: 0; display: flex; flex-direction: column;
+  background: rgba(0, 0, 0, .18);
+}
+#qvsim .rbody {
+  flex: 1; min-height: 0; overflow-y: auto; position: relative;
+  padding: 14px 12px; display: flex; flex-direction: column; gap: 6px;
+}
+#qvsim .rbody::-webkit-scrollbar { width: 6px; }
+#qvsim .rbody::-webkit-scrollbar-thumb { background: #444444; border-radius: 3px; }
+#qvsim .empty {
+  position: absolute; left: 50%; top: 46%; transform: translate(-50%, -50%);
+  width: 84%; text-align: center; pointer-events: none;
+  font-size: 12.5px; font-weight: 700; line-height: 1.75; color: #555555;
+}
+#qvsim .empty span { font-size: 11.5px; font-weight: 600; color: #444444; }
+#qvsim .sgroup { display: flex; flex-direction: column; gap: 5px; }
+#qvsim .sgtitle {
+  margin-top: 8px; padding-bottom: 4px; border-bottom: 1px solid #333333;
+  font-size: 10.5px; font-weight: 800; letter-spacing: .04em; color: #9ca3af;
+}
+#qvsim .sgroup:first-child .sgtitle { margin-top: 0; }
+#qvsim .scard {
+  display: flex; flex-direction: column; gap: 2px;
+  background: #121212; border: 1px solid #333333; border-radius: 6px; padding: 7px 9px;
+  /* ★ 与设计稿 cardPopIn 一致：.3s ease-out forwards */
+  animation: qvsimCardPopIn .3s ease-out forwards;
+}
+@keyframes qvsimCardPopIn {
+  0% { opacity: 0; transform: translateY(5px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+#qvsim .slabel { font-size: 10.5px; font-weight: 600; color: #9ca3af; }
+#qvsim .svalue { font-size: 13px; font-weight: 800; color: #f3f4f6; }
+#qvsim .svalue.hl { color: #f59e0b; }
+#qvsim .svalue.on { color: #3b82f6; }
+#qvsim .svalue.warn { color: #ef4444; }
+/* ★ 设计稿里 flash 类只是被 JS 加上又移除，CSS 并没有定义任何样式 —— 这里保持一致，不加效果。 */
+#qvsim .rfoot {
+  flex: 0 0 auto; display: flex; flex-direction: column; gap: 7px;
+  padding: 10px 12px; border-top: 1px solid #333333;
+}
+#qvsim .ghost {
+  padding: 8px; border-radius: 6px; cursor: pointer; font-family: inherit;
+  font-size: 12.5px; font-weight: 700;
+  background: transparent; color: #9ca3af; border: 1px solid #333333;
+}
+#qvsim .ghost:hover { background: #333333; color: #f3f4f6; }
+#qvsim .tsu-btn {
+  padding: 9px 8px; border-radius: 6px; cursor: pointer; font-family: inherit;
+  font-size: 12.5px; font-weight: 800; color: #3b82f6;
+  background: transparent; border: 1px solid #3b82f6;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+}
+#qvsim .tsu-btn:hover { background: rgba(59, 130, 246, .12); }
+#qvsim .tsu-btn svg { width: 15px; height: 15px; fill: currentColor; }
+#qvsim .rghint { font-size: 10.5px; line-height: 1.5; text-align: center; color: #6b7280; }
+#qvsim .rghint kbd {
+  display: inline-block; padding: 0 5px; font: 10.5px/1.7 Consolas, monospace;
+  color: #d1d5db; background: #30343d; border: 1px solid #4a4f5a;
+  border-bottom-width: 2px; border-radius: 3px;
+}
+
+/* ═══ 2026-10-26 用户设计稿（Desktop/diui.html）：首屏「架空模拟 / 历史模板」+ 模板库 ═══
+   只搬「结构」（模式二选一 + 卡片式模板列表 + 胶囊筛选），
+   配色/尺寸/圆角继续走本项目 #qvsim 的灰黑紧凑 tokens；
+   参数项仍是 koneew 的完整版（设计稿里砍掉的项不照搬）。 */
+
+/* 模式二选一 */
+#qvsim .modesw { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+/* 线上版隐藏了「历史模板」→ 只剩一张，占满整行 */
+#qvsim .modesw.solo { grid-template-columns: 1fr; }
+#qvsim .modesw .option-btn {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
+  padding: 11px 13px; text-align: left; font-size: 13.5px;
+}
+#qvsim .modesw .option-btn b { font-size: 13.5px; font-weight: 800; letter-spacing: .01em; }
+#qvsim .modesw .option-btn span { font-size: 11.5px; font-weight: 600; color: #6b7280; }
+#qvsim .modesw .option-btn.on span { color: #7fa8e8; }
+
+/* 已载入历史模板的提示条（规模/震中一改就不再算那一场 → 自动隐藏） */
+#qvsim .histbanner {
+  display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+  padding: 9px 12px; border-radius: 6px;
+  background: rgba(59, 130, 246, .1); border: 1px dashed #3b82f6;
+  font-size: 12.5px; line-height: 1.4;
+}
+#qvsim .histbanner[hidden] { display: none; }
+#qvsim .histbanner .hb-tag {
+  flex: 0 0 auto; padding: 1px 6px; border-radius: 4px;
+  background: rgba(59, 130, 246, .2); color: #8ab6f5;
+  font-size: 10.5px; font-weight: 800; letter-spacing: .04em;
+}
+#qvsim .histbanner b { font-weight: 800; color: #f3f4f6; }
+#qvsim .histbanner .hb-meta { color: #9ca3af; font-weight: 600; }
+#qvsim .histbanner .mini-btn { margin-left: auto; }
+
+/* 第 3 步的「打开模板库」入口（取代原来的下拉框） */
+#qvsim .libopen {
+  display: flex; flex-direction: column; gap: 3px;
+  padding: 11px 13px; border-radius: 6px; cursor: pointer;
+  background: #121212; border: 1px solid #333333; box-shadow: 0 2px 0 #333333;
+  transition: border-color .15s;
+}
+#qvsim .libopen:hover { border-color: #3b82f6; }
+#qvsim .libopen:active { transform: translateY(2px); box-shadow: none; }
+#qvsim .libopen b { font-size: 13.5px; font-weight: 800; color: #3b82f6; }
+#qvsim .libopen span { font-size: 11.5px; font-weight: 600; color: #6b7280; }
+
+/* ── 模板库视图 ── */
+#qvsim #svLib { z-index: 4; }
+#qvsim #svConfirm { z-index: 5; }
+#qvsim #simConfName { color: #3b82f6; }
+
+/* 右栏筛选台（模板库时从摘要看板切过来） */
+#qvsim .rightpane { position: relative; }
+#qvsim .rlayer {
+  position: absolute; inset: 0; z-index: 3;
+  display: flex; flex-direction: column; background: #1e1e1e;
+  opacity: 0; pointer-events: none; transform: translateX(12px);
+  transition: transform .28s cubic-bezier(.34, 1.4, .64, 1), opacity .22s;
+}
+#qvsim .rlayer.on { opacity: 1; pointer-events: auto; transform: none; }
+#qvsim .rlayer .fgrid {
+  flex: 1; min-height: 0; overflow-y: auto;
+  padding: 14px 12px; display: flex; flex-direction: column; gap: 16px;
+}
+#qvsim .rlayer .fgrid::-webkit-scrollbar { width: 6px; }
+#qvsim .rlayer .fgrid::-webkit-scrollbar-thumb { background: #444444; border-radius: 3px; }
+
+/* 搜索框（放大镜 + 清空） */
+#qvsim .search-wrap { position: relative; display: flex; align-items: center; }
+#qvsim .search-wrap svg {
+  position: absolute; left: 10px; width: 14px; height: 14px;
+  color: #6b7280; pointer-events: none;
+  fill: none; stroke: currentColor; stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+#qvsim .search-wrap input { width: 100%; padding: 9px 28px 9px 30px; font-size: 12.5px; }
+#qvsim .search-clear {
+  position: absolute; right: 8px; width: 16px; height: 16px;
+  display: flex; align-items: center; justify-content: center;
+  background: #333333; border: none; color: #f3f4f6; border-radius: 50%;
+  font: 12px/1 inherit; cursor: pointer; opacity: 0; pointer-events: none;
+  transition: opacity .2s, background .2s;
+}
+#qvsim .search-clear.on { opacity: 1; pointer-events: auto; }
+#qvsim .search-clear:hover { background: #9ca3af; }
+
+/* 顶部：筛选条件 / 重置全部 */
+#qvsim .filter-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+#qvsim .filter-top-title {
+  font-size: 11px; font-weight: 800; color: #9ca3af; letter-spacing: .05em;
+}
+#qvsim .btn-reset-all {
+  display: flex; align-items: center; gap: 4px;
+  background: none; border: none; color: #9ca3af; cursor: pointer;
+  padding: 4px 6px; border-radius: 4px; font: 700 11px/1 inherit;
+}
+#qvsim .btn-reset-all:hover { background: rgba(239, 68, 68, .1); color: #ef4444; }
+#qvsim .btn-reset-all svg {
+  width: 12px; height: 12px;
+  fill: none; stroke: currentColor; stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+
+/* 每个筛选组 */
+#qvsim .fgroup { display: flex; flex-direction: column; gap: 8px; }
+#qvsim .fhead {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  flex-wrap: nowrap;
+  font-size: 11px; font-weight: 800; letter-spacing: .05em; color: #9ca3af;
+}
+#qvsim .fhead-left {
+  display: flex; align-items: center; gap: 5px;
+  min-width: 0; overflow: hidden; white-space: nowrap;
+}
+#qvsim .fhead-left > span:first-child { flex: 0 0 auto; }
+#qvsim .fhead .cur-val {
+  font-size: 11px; font-weight: 700; color: #3b82f6; white-space: nowrap;
+  margin-left: 4px; overflow: hidden; text-overflow: ellipsis;
+}
+#qvsim .btn-clear-dim {
+  flex: 0 0 auto; white-space: nowrap;
+  background: none; border: none; color: #6b7280; cursor: pointer;
+  font: 700 10.5px/1 inherit; padding: 2px 4px; border-radius: 2px;
+}
+#qvsim .btn-clear-dim:hover { color: #ef4444; background: rgba(239, 68, 68, .1); }
+
+/* 筛选胶囊：小圆角方格；选中 = 淡蓝底 + 蓝边 + 蓝字（不实心） */
+#qvsim .pills { display: flex; flex-wrap: wrap; gap: 6px; }
+#qvsim .pill {
+  display: inline-flex; align-items: center; gap: 4px; cursor: pointer;
+  flex: 0 0 auto; white-space: nowrap;
+  padding: 5px 9px; border-radius: 6px;
+  background: #121212; border: 1px solid #333333; color: #9ca3af;
+  font: 700 11.5px/1.4 "Microsoft YaHei", sans-serif;
+  transition: color .15s, border-color .15s, background .15s;
+}
+#qvsim .pill:hover { border-color: #555555; color: #f3f4f6; background: rgba(255, 255, 255, .03); }
+#qvsim .pill em { font-style: normal; font-size: 10px; font-weight: 800; color: #6b7280; }
+#qvsim .pill.on { background: rgba(59, 130, 246, .12); border-color: #3b82f6; color: #3b82f6; }
+#qvsim .pill.on em { color: #3b82f6; }
+#qvsim .pill:disabled { opacity: .35; cursor: not-allowed; background: transparent; }
+#qvsim .pill:disabled:hover { border-color: #333333; color: #9ca3af; background: transparent; }
+
+/* 底部计数 */
+#qvsim .rlayer .rcount {
+  flex: 0 0 auto; margin: 0 12px 12px; padding-top: 10px;
+  border-top: 1px dashed #333333;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  font-size: 11.5px; font-weight: 700; color: #6b7280;
+}
+#qvsim .rlayer .rcount b { font-size: 14px; color: #f59e0b; }
+
+#qvsim .libbody { display: grid; grid-template-columns: 1fr; gap: 8px; align-content: start; }
+#qvsim .libcard {
+  display: flex; align-items: center; gap: 10px; cursor: pointer;
+  padding: 9px 11px; border-radius: 6px;
+  background: #121212; border: 1px solid #333333; box-shadow: 0 2px 0 #333333;
+  transition: border-color .15s;
+}
+#qvsim .libcard:hover { border-color: #3b82f6; }
+#qvsim .libcard:active { transform: translateY(2px); box-shadow: none; }
+#qvsim .lc-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+#qvsim .lc-name {
+  display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap;
+  font-size: 13px; font-weight: 800; color: #f3f4f6;
+}
+#qvsim .lc-time { font-size: 10.5px; font-weight: 700; color: #6b7280; }
+#qvsim .lc-meta {
+  font-size: 10.5px; font-weight: 600; color: #9ca3af;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#qvsim .lc-right {
+  flex: 0 0 auto; display: flex; flex-direction: column; align-items: flex-end; gap: 3px;
+}
+#qvsim .lc-mag { flex: 0 0 auto; font-size: 15px; font-weight: 900; color: #f59e0b; }
+#qvsim .lc-tag {
+  font-size: 10px; font-weight: 800; color: #8ab6f5;
+  padding: 0 5px; border-radius: 3px; background: rgba(59, 130, 246, .14);
+}
+#qvsim .libempty {
+  grid-column: 1 / -1; padding: 28px 0; text-align: center;
+  font-size: 12.5px; font-weight: 700; color: #555555;
+}
+
+/* ★ 紧急地震速报（模拟）页 —— 第二 tab「摇晃检测」
+   ★★★★ 2026-10-20 第六轮：坐标全部改用《官方 EEW 破解指南》§8 的**实测表**
+   （makeClone + getBounds 量出来的 87.5% 面板内像素，误差 <1px）
+
+   ── 换算链 ──────────────────────────────────────────────
+   表里的「面板内 x/y」= 相对 paEEW0 左上角内侧 (3.5, 3.8) 的 87.5% 像素。
+   画布(100%) = (面板内 + (3.5, 3.8)) / 0.875
+   #eewpage 内部 CSS 坐标 = 画布坐标 − 12（.bg 的 left/top = −12）
+
+   ── 逐项换算结果（画布 100%）──────────────────────────
+     背景 paEEW0      (  0.0,   0.0)  264×388
+     地名 nm          ( 30.3,  61.1)  s1.2
+     発生日時 dej     (108.0,  75.3)  s1
+     予報標 paEt      (151.9, 103.3)  20×10
+     震度卡 paSc      (  8.0, 108.1)  248×120（墨迹 208×80）
+       └ paSu        ( 28.0, 128.1)  208×80
+       └ snd         ( 92.0, 128.1)   80×80
+     副卡 paScl/paSul ( 28.0, 215.9)  208×48
+       └ sndl        (173.8, 215.9)   48×48
+     文言 paEm0       ( 33.9, 322.6)  196×34
+   校验：paSu (28,128.1) 与 paSc 墨迹 (8+20, 108.1+20) 完全重合 ✔
+   注意：**文言在底部、震源名在顶部** —— 前几轮我把这两个放反了。 */
+#eewpage {
+  /* ★★★ 2026-10-25 已撤销：上一版把它改成 left:12px 来补卡片左边距，
+     结果把**整个信息栏（含观测震度面板）**一起右移了 → 用户：「动了我信息栏尺寸」。
+     ⇒ 宿主坐标恢复原值（left:0），卡片边距问题只在 `.lvcard.unk` 里按官方尺寸处理。 */
+  /* ★ 2026-11-04：样例是「地图满屏 + 左上角悬浮卡片」，不再是贴边的一整条实心竖栏。
+     官方面板内部坐标是 240×720 硬编码，不能重排 —— 这里只把整块面板
+     变成带 10px 边距、圆角、投影的悬浮卡：地图能从四周边缘露出来。
+     内部震度卡 / 实时读数 / 观测列表的 DOM 定位一律不动（仅整体平移 10px）。 */
+  position: absolute; left: 10px; top: 10px; width: 240px; height: 700px;
+  font-family: 'NotoSC',"Noto Sans SC","Source Han Sans SC","Microsoft YaHei UI",sans-serif;
+  color: #fff; z-index: 2;
+  pointer-events: auto;   /* 2026-10-24: needed to receive wheel for whole-panel scroll */
+  /* ★ 2026-10-29: .bg 宽 264px，容器 240px，设为 overflow:visible 允许底图自然延伸不被裁切 */
+  overflow: visible;
+  background: rgba(8,12,20,.86);
+  border: 1px solid rgba(255,255,255,.09);
+  border-radius: 14px;
+  box-shadow: 0 14px 44px rgba(0,0,0,.72);
+}
+/* paEEW0（予報）/ paEEW1（警報，带 #8e0a0a 斜纹）全画布 264×388 */
+#eewpage .bg { position: absolute; left: -12px; top: -12px; width: 264px; height: 388px; display: none !important; }
+/* ★ 震度速报（调查中）态：底图换成官方 paIbg130（264×302），不能按 388 拉伸
+   ═══ 2026-10-21 重排：坐标**全部来自官方 project.json**，并在官方运行时里
+   用 getBounds() 逐项校验过（误差 < 0.1px），不是目测像素推的。
+     · 官方换算公式（面板 `ci` 组）：
+         Δ(造型px) = 2 × (设计坐标 − 面板中心设计坐标)
+     · `クローン` 现传参（设计坐标）：
+         paIbg130 底图 (56, 面板码/2=65) · paIti 标题 (56,8) · paSc 色块 (56,44)
+         snd 数字 (83,44) · paIts 津波条 (56, 面板码−16=114)
+     · paIbg130 画布 264×302，卡面 x20..244 y21..281，
+       标题条 #31476d 在 y21..53，「震源・規模　調査中」白字 y184..211（烤在 SVG 里）
+     · ⚠️ 画布 302 高是**造型边界**，不是卡面高度：SVG 里只有卡面 #1d2a41（到 y281）
+       和一个 y82..98 的小渐变，**y281 以下完全透明、没有任何投影**。
+       所以下面 21px 露出的是容器底色 —— 不能当成「卡片本体」来排版。
+     · `.bg` 是 left:-12 ⇒ CSS x = 画布坐标 − 12
+     · ⚠️ 2026-10-21 两轮反馈后的定稿：
+       画布顶 0~21 也是**完全透明**（卡面从 y21 才开始），而 body 是纯黑 rgb(0,0,0)。
+       ① top:0     → 上方 21px 死黑（用户：「还有较大的黑背景」）
+       ② top:-21   → 上方 0px，卡片贴顶（用户：「太小了，把上面的背景搞没了」）
+       ③ top:-12   → **定稿**，和非 info 态的 .bg 同一偏移，上方留 9px 边距。
+       ⚠️ 改这里必须同步改下面 5 个槽位（bandli / lvcard / tsuq / dbgw 全部 = 画布坐标 − 12）。 */
+#eewpage.info .bg { height: 302px; top: -12px; }
+/* 130 卡里没有震源地名 / 発生日時 / 官方字形层的槽位（标题→震度块→震源規模→津波）
+   ⚠️ 必须 !important：本文件后面还有 .place / .ptime 的定义，同特异性下后者赢 */
+#eewpage.info .place { display: none !important; }
+#eewpage.info .ptime { display: none !important; }
+#eewpage.info .qvgl { display: none !important; }
+/* 标题 = 官方 paIti1「ⓘ 震度速報」整图（224×32 透明白字），
+   正好盖在 paIbg130 自带的 #31476d 标题条（画布 x20..244 y21..53）上 */
+#eewpage .bandli { display: none; }
+#eewpage.info .bandli {
+  display: block; position: absolute; left: 8px; top: 9px; width: 224px; height: 32px;
+}
+#eewpage.info .bandl { display: none; }
+/* ═══ 最大震度块：紧急地震速报卡 / 震度速報卡 **共用同一个 .lvcard** ═══
+   两边的 HTML 是同一段、素材也是同一套（paSc 色块 + paSs/paSu 标签 + snd 数字），
+   只有两处随卡片不同而变化（数值全部来自官方 project.json）：
+     · 块顶：EEW = 96.1（画布 108.1）｜震度速報 = 49（画布 49）
+       —— 震度速報卡整体矮 86px，官方的块也跟着上移
+     · 数字 left：EEW = 120（官方 snd 与 paSc 同心 x=56）
+       ｜震度速報 = 138（官方 snd x=83 → 与 paSc 错开半个身位）
+   下面的规则特异性本来就高于基类，不需要 !important。 */
+#eewpage.info .lvcard { top: 37px; }
+/* 数字 snd（80×80）：中心在画布 (186,109) ⇒ 相对 .lvcard 左上 = 146 − 8 = 138 */
+#eewpage.info .lvcard .lvnum { left: 138px; }
+/* 「津波　調査中」paIts2（228×60）：中心在画布 (132,249) ⇒ CSS 左上 (6, 207) */
+#eewpage .tsuq { display: none; }
+#eewpage.info .tsuq {
+  display: block; position: absolute; left: 6px; top: 207px;
+  width: 228px; height: 60px;
+}
+
+/* ═══ 取消报（eewC）：紧急地震速报被撤销 ═══
+   官方做法（用户给的原版截图）：**整张卡片压暗 + 模糊**，原数据（推定最大震度 /
+   マグニチュード / 深さ）都还在但看不清，上面压大字「キャンセル」+ 说明。
+   ⇒ 遮罩覆盖**整张卡**（0,0,240,366，不盖到 366 起的观测震度面板），
+     `backdrop-filter: blur()` 做真模糊，半透明黑做压暗；
+     只有底部那张官方文言图 paem 隐掉（取消时不该出现「強い揺れに警戒」）。 */
+#eewpage .cncl { display: none; }
+#eewpage.cancel .cncl {
+  display: block; position: absolute; left: 0; top: 0; width: 240px; height: 366px;
+  box-sizing: border-box; padding-top: 96px;
+  background: rgba(8,12,20,.9);
+  color: #fff; text-align: center; z-index: 6;
+}
+#eewpage.cancel .cncl b {
+  display: block; font-size: 34px; font-weight: 800; letter-spacing: .1em;
+  line-height: 60px;
+}
+#eewpage.cancel .cncl span {
+  display: block; font-size: 16px; font-weight: 700; line-height: 26px;
+}
+#eewpage.cancel .paem { display: none !important; }
+/* ★ 2026-10-21 用户：「调查中的卡片和下面的黑色背景太多了，改一下和原版一样」
+   真因：卡面只到画布 y281，而 .dbgw 一直挂在 306 —— 中间 25px 全是透明，
+   露出的容器底色看着就是一大块黑（官方那边露的是地图，所以不显眼）。
+   ⇒ 卡面下沿 + 9px（卡面底在 CSS 281−12=269，与上方 9px 边距对称）= 278。
+   经历：306（缝 25px，用户「太多了」）→ 285/273（缝 4px，用户「太挤了」）→ **278（定稿 9px）**。 */
+#eewpage.info .dbgw { top: 278px; border-radius: 5px; }
+
+
+
+/* 顶部横条（素材自带底色/斜纹，只需叠中文）
+   官方白字实测：264 图内 y 29..42、x 41..134（七字 93 宽 ⇒ 单字 13.3px、字高 14px）
+   ⇒ 中文按 15px 排，容器左缘 18（画布 30）、宽 116（中心 76 = 官方文字中心 87.5−12）*/
+#eewpage .bandl {
+  position: absolute; left: 18px; top: 8px; width: 116px; height: 32px;
+  line-height: 32px; text-align: center; font-size: 16px; font-weight: 600;
+  color: #fff; letter-spacing: .01em;
+}
+#eewpage .bandr {
+  position: absolute; left: 144px; top: 8px; width: 88px; height: 32px;
+  line-height: 32px; text-align: center; font-size: 15px; font-weight: 600;
+  color: #1c1c1c; letter-spacing: .01em;
+}
+#eewpage.red .bandr { color: #fff; }
+
+/* 震源地名（顶部第一行，画布 30.3,61.1 → CSS 18.3,49.1）/ 発生時刻（第二行） */
+#eewpage .place {
+  position: absolute; left: 18.3px; top: 49.1px; width: 200px;
+  font-size: 22px; font-weight: 600; line-height: 30px; color: #fff;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+#eewpage .ptime {
+  position: absolute; left: 18.3px; top: 80px; width: 200px;
+  font-size: 19px; font-weight: 400; line-height: 22px; color: #e7eefb;
+  overflow: hidden; white-space: nowrap;
+}
+/* 予報/警報小标 paEt（20×10） */
+#eewpage .paet { position: absolute; left: 139.9px; top: 91.3px; width: 20px; height: 10px; }
+
+/* 震度卡：画布 (8,108.1) 248×120 → CSS (−4,96.1)；墨迹 208×80 居中（留白 20） */
+#eewpage .lvcard { position: absolute; left: -4px; top: 96.1px; width: 248px; height: 120px; }
+#eewpage .lvcard .lvbg { position: absolute; left: 0; top: 0; width: 248px; height: 120px; }
+#eewpage .lvcard .lvlab { position: absolute; left: 20px; top: 20px; width: 208px; height: 80px; }
+/* 数字：paSu 图内文字实测只占 x 26..97，空白区 98..208
+   ⇒ 80×80 数字框居中在空白区：左 = 20 + 112 = 132（相对 .lvcard）*/
+#eewpage .lvcard .lvnum { position: absolute; left: 120px; top: 20px; width: 80px; height: 80px; }
+/* ★★★ 2026-10-25 深源「不明」：底图 paSc-1 本身就是 **208×80 的墨迹框**，
+   普通震度卡把它拉伸到 248×120 会变形（圆角变大、与 sndhs 文字层不同框）。
+   用户指定「直接照搬震度卡片的尺寸」⇒ 底板与文字层都用 20,20 208×80，两图完全重合。 */
+#eewpage .lvcard.unk .lvbg { left: 20px; top: 20px; width: 208px; height: 80px; }
+
+/* 长周期副卡：画布 (28,215.9) 208×48 → CSS (16,203.9) */
+#eewpage .lc { position: absolute; left: 16px; top: 203.9px; width: 208px; height: 48px; display: none; }
+#eewpage .lc .lcbg, #eewpage .lc .lclab { position: absolute; left: 0; top: 0; width: 208px; height: 48px; }
+#eewpage .lc .lcnum { position: absolute; left: 145.8px; top: 0; width: 48px; height: 48px; }
+/* ★★ 2026-10-26 烈度区特供（照抄官方卡版式）：
+   官方原卡 = 「左 9 字标签 24..140」+「右 1 位大数字 155..185」。
+   烈度区只有 5 个字的标签 + 2 个字的分级 ⇒ 左侧标签放大到 22px（5×22=110，仍占 24..134，
+   与原版 9 字的 116px 等长），右侧 26px 中文顶替数字（2×26=52，145..197，与原版数字同中心）。 */
+#eewpage .lc .lclb.lie { left: 21px; width: 126px; }
+#eewpage .lc .lclb.lie b {
+  font-size: 20px; font-weight: 600; line-height: 24px; letter-spacing: .01em;
+}
+/* 整组居中：官方原卡「标签 24..135 + 间隙 15 + 数字」⇒ 左右边距都是 24。
+   5 字标签 20px = 101，间隙 13，2 字定性词 46；用户要求整组再左移 3px。 */
+#eewpage .lc .lcword {
+  position: absolute; left: 131px; top: 0; width: 58px; height: 48px;
+  line-height: 48px; text-align: center; white-space: nowrap;
+  font-size: 23px; font-weight: 800; color: #fff; letter-spacing: .01em;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .22);
+}
+/* ═══ 2026-10-23 有长周期階級时：官方高版底图 paEEW4/5（264×500）═══
+   副卡放在震度块下方（224），规模/深度/文言整体下移 112px，观测面板也让到 494。 */
+#eewpage.haslc .lc { display: block; top: 208px; }
+/* ═══ 有长周期階級 → 官方高版底图 paEEW4（予報）/ paEEW5（警報）═══
+   高版可视外沿 canvas 34（短版 10）→ 按用户要求整体再上提 8px：top = −68。
+   换算：CSS y = canvasY × 2 − 68。 */
+#eewpage.haslc .bg { top: -68px; height: 500px; }
+#eewpage.haslc .bandl, #eewpage.haslc .bandr { top: 8px; }
+#eewpage.haslc .mag, #eewpage.haslc .bar.m { top: 268px; }
+#eewpage.haslc .dep, #eewpage.haslc .bar.d { top: 320px; }
+#eewpage.haslc .paem { top: 366.6px; }
+#eewpage.haslc .dbgw { top: 422px; }
+/* 标签（官方 paSul 已清洗）：左边「推定」+ 两行中文说明，整块垂直居中
+   ★★ 2026-10-23 用户：「卡片里面的数字和文字和官方的不一样，位置不一样」
+      → 实测官方 paSul 素材墨迹（208×48 画布）：
+          推定  x 20..59  y 14..33（字高 20，即 20px）
+          两行  x 70..134 y 10..37（5 字 65 宽 → 12.5px，行距 14.5）
+      → 与用户提供的官方实拍图逐像素比对（归一到色块宽）：
+          推定 0.099..0.275 ✓   两行 0.345..0.644 ✓   数字 0.789..0.856 ✓
+      ⇒ left 20、推定 20px、两行 12.5px/14.5，间距 12（= 70 − 58）。
+      以前是 left 10 / 15px / 10.5px → 整块偏左且偏小（比官方窄 27px）。 */
+#eewpage .lc .lclb {
+  position: absolute; left: 20px; top: 0; height: 48px; width: 118px;
+  display: flex; align-items: center;
+}
+#eewpage .lc .lclb i {
+  font-style: normal; font-size: 20px; font-weight: 800; color: #fff;
+  margin-right: 12px; line-height: 24px;
+}
+#eewpage .lc .lclb b {
+  font-size: 12.5px; font-weight: 600; color: #fff; line-height: 14.5px;
+  letter-spacing: .01em;
+}
+/* ★★★ 2026-10-27 用户：「地震周期 1 级的字体为什么是白色的都看不清，应该是黑色」
+   —— 階級1 的底板是黄色（paScl1），而 sndl1 数字素材本身是白色（fill #ffffff）→ 看不见。
+   数字用 brightness(.11) 压成近黑（与震度卡 darkNum 同一手法），文字直接改色。 */
+#eewpage .lc.darknum .lclb i,
+#eewpage .lc.darknum .lclb b { color: #1c1c1c; }
+#eewpage .lc.darknum .lcnum { filter: brightness(.11); }
+#eewpage .lc.darknum .lcword { color: #1c1c1c; text-shadow: none; }
+
+/* 规模 / 深度行：用 paEEW1 里两条官方白槽的位置（画布 214..230）
+   槽1 y 224..264 → CSS 212..252；槽2 y 276..306 → CSS 264..294 */
+/* 规模 / 深度行 —— **照拄第一页（render3.js L.mag / L.dep）**
+   第一页实测：标签 mag size 13 / dep size 15、颜色 #c2c9d4；
+              数值 mag size 110 / dep size 70（字形原高 30px ⇒ 33px / 21px）
+   位置用 paEEW1 里两条白槽：槽1 y 224..264 → CSS 212..252；槽2 y 276..306 → CSS 264..294 */
+#eewpage .mag, #eewpage .dep { position: absolute; left: 0; width: 202px; height: 40px; }
+#eewpage .mag { top: 212px; }
+#eewpage .dep { top: 264px; height: 30px; }
+#eewpage .mag em, #eewpage .dep em {
+  position: absolute; left: 25px; top: 13px; font-style: normal;
+  font-size: 13px; line-height: 14px; font-weight: 400; color: #c2c9d4;
+  letter-spacing: .02em;
+}
+#eewpage .dep em { top: 8px; font-size: 15px; line-height: 16px; }
+#eewpage .mag b, #eewpage .dep b {
+  position: absolute; left: 0; width: 196px; top: 0; text-align: right;
+  font-weight: 700; color: #fff; font-size: 33px; line-height: 40px;
+}
+#eewpage .dep b { font-size: 21px; line-height: 30px; }
+/* 官方色阶槽（面板底图里是白的）：主界面同一套配色算法上色 */
+#eewpage .bar { position: absolute; left: 202px; width: 16px; border-radius: 2px; }
+#eewpage .bar.m { top: 212px; height: 40px; }
+#eewpage .bar.d { top: 264px; height: 30px; }
+
+/* 文言：官方 paEm0（予報·白字）/ paEm2（警報·黄字）整图 196×34
+   画布 (33.9,322.6) → CSS (21.9,310.6) —— **在卡片底部**
+   ⚠ paEm* 的 SVG 内容超出 196×34 的 viewBox（下面还挂着一行「表示するものはありません」），
+     不裁的话会渲染到卡片底外（用户：「大卡片和观测震度之间为什么会有一个白字」）*/
+#eewpage .paem { position: absolute; left: 21.9px; top: 310.6px; width: 196px; height: 34px; overflow: hidden; }
+#eewpage .paem img { position: absolute; left: 0; top: 0; width: 196px; height: 34px; }
+/* ★★★ 2026-10-27 官方文言的中文版（烈度区用；日本震度区仍用官方日文整图）
+   1:1 对官方量出来的：画布 196×34、**两行 17px 行高刚好填满**、
+   字号不写死 —— 官方是逐条自动缩放的（paEm3 13 字 → 15px，paEm5 17 字 → 11.5px），
+   所以由 JS 按「196 ÷ 最长行字数」算好写在 inline style 上。
+   字色取自官方 SVG：白 #dbe9ff / 黄 #ffd253 / 红 #ff4b41 */
+#eewpage .paemtx { position: absolute; left: 0; top: 0; width: 196px; height: 34px;
+  display: flex; flex-direction: column; justify-content: flex-start;
+  font-weight: 700; font-family: "Microsoft YaHei", "Noto Sans SC", "PingFang SC", sans-serif;
+  /* ★ 2026-10-27 用户「渲染的文字上移」→ 整体往上抬 **3px** */
+  transform: translateY(-3px); }
+#eewpage .paemtx i { font-style: normal; display: block; white-space: nowrap; line-height: 17px; }
+#eewpage .paemtx.lit { color: #dbe9ff; }
+#eewpage .paemtx.warn { color: #ffd253; }
+#eewpage .paemtx.emg { color: #ff4b41; }
+
+/* ═══ 2026-10-21 震度速报（调查中）卡片：按官方截图校排版 ═══
+   官方那张卡片的结构：
+     ⓘ 震度速報  ← 深蓝顶栏
+     [ 最大震度   N ]  ← 震度色大色块
+     7月28日 16:27 ごろ
+     震源・規模   調査中     ← 标签左、值右（大字）
+     [ 津波  調査中 ]        ← 灰底圆角条
+   所以 info 态要：两项都放大字号、津波那行改成灰底圆角条。 */
+#eewpage.info .mag em, #eewpage.info .dep em { font-size: 14px; color: #dfe6f2; }
+#eewpage.info .mag b, #eewpage.info .dep b { font-size: 26px; letter-spacing: .04em; }
+#eewpage.info .dep {
+  top: 250px; height: 36px; left: 20px; width: 190px;
+  background: rgba(126,138,158,.62); border-radius: 7px;
+}
+#eewpage.info .dep em { left: 16px; top: 10px; font-size: 15px; }
+#eewpage.info .dep b { text-align: right; padding-right: 14px; line-height: 36px; }
+
+
+/* 侧栏「观测震度」面板。实测（canvas 扫 clean SVG 像素）：
+     卡片真底 = SVG 内部 y367 − 12 = CSS 355；.bg 元素 388 高但底部 21px 透明
+   文言图 paEm 底 = 310.6 + 34 = 344.6
+   → 344.6~355 是卡片自身底部留白（深蓝），355~366 才是露出页面黑底 #12151a 的真间隙 11px
+   376 时黑隙 21px（用户：太大了）；356 时只 1px（用户：又重叠了）*/
+#eewpage .dbgw {
+  position: absolute; left: 8px; top: 366px; width: 224px; height: 356px;
+  /* ★ 2026-10-20 用户：「这玩意不应该归那个控件管吗？为什么加到背景里面？」
+     以前面板下半部是靠 art 层的履历底板 paTbg1 铺的（y610..870），
+     非情报页一收就又露黑底。现在面板自带底色（= dbg 素材实测 #1d2a41）
+     + 自适应高度（drawEEW 里按 QVVisibleH 拉到底），整块完全自包含。 */
+  background: #1d2a41;
+  border-radius: 0 0 5px 5px;
+}
+#eewpage .dbgw .dbg { position: absolute; left: 0; top: 0; width: 224px; height: 356px; }
+/* ★ 2026-10-24 用户：「切换到海啸页面的时候应该隐藏『地図の色』这个卡片，
+   然后在原来的地方放海岸线颜色图例」
+   #maplegend 是 mapcam.js 画的地图右下角震度图例（地図の色）；
+   海啸页自己有一张官方 hnt<等级>「海岸线颜色」图例，两者会叠在一起 → 海啸页里关掉它。
+   ⚠️ 必须 !important：mapcam 是每帧写 inline display 的。 */
+#stage.tsuview #maplegend { display: none !important; }
+/* ★★★ 2026-10-20「揺れを検出」态（观测震度 < 3）：官方不发速报，只留一列地区名
+   —— 面板直接用 paDbg0（列表底 224×356）从 y=8 起，没有速报卡 */
+#eewpage.detect .dbgw {
+  top: 8px; border-radius: 5px;
+  box-shadow: 0 2px 10px rgba(0,0,0,.35);
+}
+#eewpage.detect .areas li { padding: 0 10px; }
+/* 表头带 = 素材自带 #31476d 横条（画布 0..32） */
+#eewpage .dbgh {
+  position: absolute; left: 0; top: 0; width: 224px; height: 32px; line-height: 32px;
+  text-align: center; font-size: 17px; font-weight: 600; color: #eaf4ff;
+  text-shadow: 0 1px 2px rgba(0,0,0,.5); letter-spacing: .04em;
+}
+/* 2026-10-24 (5th pass, user): "the WHOLE card scrolls up -- the big card gets pushed
+   out of view and more observation rows show". So the list simply lays out at full
+   height; drawEEW translates #eewpage as a whole. */
+#eewpage .areas {
+  position: absolute; left: 0; top: 48px; width: 224px;
+  margin: 0; padding: 0 0 8px; list-style: none;
+  overflow: visible; pointer-events: none;
+}
+#eewpage .areas li {
+  display: flex; align-items: center; height: 32px; padding: 0 10px;
+  font-size: 16px; color: #fff;
+}
+/* sndm 素材 32×30（100%） */
+#eewpage .areas li img { width: 32px; height: 30px; margin-right: 8px; flex: 0 0 32px; }
+#eewpage .areas li span {
+  flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  font-weight: 400; letter-spacing: .02em; text-shadow: 0 1px 2px rgba(0,0,0,.55);
+}
+/* ★★ 2026-10-20「揺れを検出」范围框：
+   `#mapboxes .qvbox` = 官方 `枠描画` 同款 2px 彩线（绿 #40bf4a / 黄 #ffd500 / 橙 #ff661a）。
+   框的几何来自【官方区域多边形的外接框】→ 一个县大小起步、竖着的县就是竖框；
+   无白底、无外描边、无自加闪烁动画。 */
+#mapboxes .qvbox { opacity: 1; }
+/* 模拟倒计时 / 模拟中标识 —— ★ 2026-10-25 用户：
+   「这个叉叉叉秒后开始模拟，能不能放到右上角，同时常驻，0 秒过后那里就改成『模拟画面』字样」
+     → 从「舞台正中的 96px 大数字」改成【右上角常驻徽标】（模拟开始后不消失，换成「模拟画面」）
+   「改成和时间条同款规格的」
+     → 规格照抄时间条 `timebg0`（assets/clean/252108…svg，252×38 @ left:290,top:11）：
+        高 38、圆角 10、底色 #12151a（不透明）、白字 + 小号灰字标签、单行。
+   ⚠️ 时间条是画在 canvas 图集层的（不是 DOM），所以这里只能用同样的数值复刻，无法直接复用那个元素。 */
+#qvsimcount {
+  position: absolute; right: 12px; top: 11px; z-index: 30; display: none;
+  pointer-events: none; white-space: nowrap;
+  height: 38px; line-height: 37.5px;
+  padding: 0 13px;
+  border-radius: 10px;
+  background: #12151a;
+  font-family: "Microsoft YaHei UI","Microsoft YaHei",sans-serif;
+  color: #ffffff;
+}
+#qvsimcount.on { display: block; }
+#qvsimcount b { display: inline; font-size: 22px; font-weight: 700; margin-right: 6px; }
+#qvsimcount span { display: inline; font-size: 14.5px; font-weight: 400; color: #e6edf6; }
+#qvsimcount em { display: inline; margin-left: 10px; font-size: 13px; font-style: normal; color: #c6d0de; }
+/* 模拟开始后：只剩「模拟画面」（数字和 Esc 提示收掉） */
+#qvsimcount.run b, #qvsimcount.run em { display: none; }
+#qvsimcount.run span { font-size: 14.5px; letter-spacing: .06em; }
+
+/* 字形零件：SVG 有内边距，放大后不糊 */
+#art img, #txt img {
+  image-rendering: -webkit-optimize-contrast;
+  shape-rendering: geometricPrecision;
+}
+
+/* 启动 / 错误层 */
+#boot, #err {
+  position: fixed; inset: 0; z-index: 99;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  background: #000; color: #fff; text-align: center;
+  font-family: "BIZ UDPGothic", "Yu Gothic UI", Meiryo, sans-serif;
+}
+#err h1 { font-weight: 400; font-size: 38px; margin: 0 0 16px; }
+#errmsg { font: 16px/1.5 monospace; color: #ffb4b4; max-width: 80%; white-space: pre-wrap; text-align: left; }
+
+#qvcycmenu::-webkit-scrollbar { width: 6px; }
+#qvcycmenu::-webkit-scrollbar-track { background: transparent; }
+#qvcycmenu::-webkit-scrollbar-thumb { background: #31476d; border-radius: 3px; }
+#qvcycmenu::-webkit-scrollbar-thumb:hover { background: #3f5c8a; }
+
+
+/* ══════════════════════════════════════════════════════════════
+   启动页（2026-11-02 按用户给的 Desktop/jzj.html 重做）
+   左：koneew 大标题 + MB 进度 + 逐文件加载日志
+   右：贪吃蛇卡片（用户明确要求保留）
+
+   ★★ 2026-11-02 二次修 —— 用户：「主页…100% 缩放都是不对了，
+      只有在 80% 才是正常的」
+      病根：第一版用的是「1920×1080 固定舞台 + transform: scale(装下)」。
+        1536×740 的窗口 → s = min(1536/1920, 740/1080) = 0.685，
+        舞台只有 1315px 宽，左右各空 110px，字号还整体缩成七折
+        ⇒ 看着就是「小了一号 + 两条黑边」。浏览器缩到 80% 时
+        视口变成 1920 宽，才勉强接近设计稿 → 用户觉得「80% 才正常」。
+      ⇒ 改成 **grid 铺满视口 + clamp() 字号**：不再有固定设计尺寸，
+        任何窗口比例都正好填满，100% / 80% / 150% 一个样。
+   ══════════════════════════════════════════════════════════════ */
+#boot {
+  /* ⚠ 不能加 display:block !important —— 会盖掉全局 [hidden]{display:none!important}
+     （加了 !important 后 #boot 再也藏不住，黑幕永远压在界面上） */
+  display: block;
+  background:
+    radial-gradient(1100px 760px at 72% -14%, rgba(22,64,98,.42), transparent 60%),
+    radial-gradient(900px 720px at 8% 114%, rgba(46,34,92,.36), transparent 60%),
+    #05070d !important;
+  color: #e8eef7;
+  text-align: left;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif !important;
+  -webkit-font-smoothing: antialiased;
+}
+#boot *, #boot *::before, #boot *::after { box-sizing: border-box; }
+#boot h1, #boot p, #boot ul, #boot li { margin: 0; padding: 0; }
+#boot button { font-family: inherit; }
+
+/* 舞台 = 整个视口，左右两栏用 grid 分；boot-bg 在最底层 */
+#boot .bstage {
+  position: absolute; inset: 0; z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(280px, 32vw, 560px);
+  grid-template-rows: 100%;
+  background: transparent;
+}
+
+/* 背景地震波纹动画（纯 CSS，不依赖 JS，呼应地震主题） */
+#boot .boot-bg { position: absolute; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
+#boot .boot-bg .ripple {
+  position: absolute; left: 50%; top: 50%;
+  width: 44vmax; height: 44vmax; margin: -22vmax 0 0 -22vmax;
+  border: 2px solid rgba(90,170,255,.16); border-radius: 50%;
+  opacity: 0; animation: bootRipple 6.5s ease-out infinite;
+}
+#boot .boot-bg .ripple:nth-child(2) { animation-delay: 2.17s; }
+#boot .boot-bg .ripple:nth-child(3) { animation-delay: 4.33s; }
+@keyframes bootRipple {
+  0%   { transform: scale(.18); opacity: .55; }
+  100% { transform: scale(2.5); opacity: 0; }
+}
+
+/* ───────────── 左栏 ───────────── */
+#boot .bside-left {
+  position: relative; z-index: 1;
+  padding: clamp(16px, 4vh, 64px) clamp(16px, 4vw, 80px);
+  display: flex; flex-direction: column; gap: clamp(12px, 2vh, 22px);
+  min-width: 0; min-height: 0; overflow: hidden;
+}
+
+/* 主卡片（玻璃悬浮质感） */
+#boot .boot-card {
+  background: linear-gradient(160deg, rgba(22,30,46,.88), rgba(10,14,22,.84));
+  border: 1px solid rgba(120,160,220,.16);
+  border-radius: 20px;
+  padding: clamp(20px, 2.6vw, 34px);
+  box-shadow: 0 24px 60px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.05);
+  max-width: 520px;
+}
+
+/* 品牌区 */
+#boot .boot-brand { display: flex; align-items: center; gap: 14px; }
+#boot .boot-logo {
+  width: 46px; height: 46px; flex: none; border-radius: 13px; position: relative;
+  background: radial-gradient(circle at 50% 42%, #2a6cff 0%, #0b1a3a 72%);
+  box-shadow: 0 0 0 1px rgba(120,160,255,.45), 0 0 24px rgba(40,120,255,.55);
+}
+#boot .boot-logo::before, #boot .boot-logo::after {
+  content: ''; position: absolute; left: 50%; top: 50%; border-radius: 50%;
+  transform: translate(-50%, -50%); border: 2px solid rgba(185,212,255,.75);
+}
+#boot .boot-logo::before { width: 17px; height: 17px; }
+#boot .boot-logo::after {
+  width: 31px; height: 31px; opacity: .5; border-style: dashed;
+  animation: bootSpin 4s linear infinite;
+}
+@keyframes bootSpin { to { transform: translate(-50%, -50%) rotate(360deg); } }
+#boot .boot-brand-text { display: flex; flex-direction: column; line-height: 1.15; }
+#boot .boot-name {
+  font-size: clamp(20px, 2.2vw, 30px); font-weight: 800; letter-spacing: -.02em; color: #fff;
+}
+#boot .boot-tag {
+  font-size: clamp(11px, .9vw, 13px); color: #8aa0c0; letter-spacing: .1em; margin-top: 3px;
+}
+
+/* 状态行 */
+#boot .boot-status-row {
+  display: flex; align-items: center; gap: 10px;
+  font-size: clamp(12px, 1vw, 15px); color: #9fb4d6; letter-spacing: .02em;
+}
+#boot .dot {
+  width: 9px; height: 9px; border-radius: 50%; background: #0A84FF; flex: none;
+  animation: bblink 1.2s ease-in-out infinite;
+}
+#boot .dot.ok { background: #30D158; animation: none; }
+@keyframes bblink { 50% { opacity: .25; } }
+
+/* 进度区 */
+#boot .boot-progress { margin-top: clamp(2px, 1vh, 8px); }
+#boot .boot-pct { display: flex; align-items: baseline; gap: 4px; }
+#boot .boot-pct #bootPct {
+  font-size: clamp(42px, 5.2vw, 70px); font-weight: 800; line-height: 1;
+  background: linear-gradient(92deg, #4DA6FF, #39E0FF 55%, #39FF14);
+  -webkit-background-clip: text; background-clip: text; color: #4DA6FF;
+  font-variant-numeric: tabular-nums; letter-spacing: -.03em;
+}
+#boot .boot-pct .unit {
+  font-size: clamp(18px, 2vw, 28px); font-weight: 700; color: #5f7390;
+}
+#boot .boot-mb {
+  margin-top: 6px; font-size: clamp(12px, 1vw, 15px); color: #8aa0c0;
+  font-variant-numeric: tabular-nums;
+}
+#boot .boot-mb #bootMbNow { color: #e8eef7; font-weight: 600; }
+#boot .bar {
+  margin-top: clamp(12px, 1.8vh, 18px);
+  height: clamp(8px, .7vw, 12px); border-radius: 999px;
+  background: rgba(255,255,255,.08); overflow: hidden;
+}
+#boot .bar-fill {
+  height: 100%; width: 0; border-radius: 999px;
+  background: linear-gradient(90deg, #0A84FF, #39E0FF);
+  box-shadow: 0 0 12px rgba(57,224,255,.6);
+  transition: width .3s cubic-bezier(.4, 0, .2, 1);
+}
+#boot .now {
+  margin-top: clamp(10px, 1.6vh, 16px);
+  height: 1.5em; font-size: clamp(10px, .9vw, 13px); color: #7e90ad;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#boot .boot-skip {
+  margin-top: 16px; align-self: flex-start;
+  padding: 9px 18px; background: transparent;
+  border: 1px solid rgba(120,160,220,.35); color: #9fb4d6; border-radius: 10px;
+  cursor: pointer; font-size: 13px; letter-spacing: .4px;
+  transition: background .15s ease, color .15s ease, border-color .15s ease;
+}
+#boot .boot-skip:hover {
+  background: rgba(120,160,220,.12); color: #e8eef7; border-color: rgba(120,160,220,.6);
+}
+
+/* 逐文件日志 */
+#boot .blog {
+  margin-top: clamp(10px, 2.6vh, 34px); padding: 0 12px 0 0;
+  list-style: none;
+  flex: 1; min-height: 0;
+  overflow-y: auto; scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(to bottom, #000 92%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 92%, transparent 100%);
+}
+#boot .blog::-webkit-scrollbar { display: none; }
+#boot .blog-item {
+  display: flex; align-items: center; gap: clamp(8px, .9vw, 16px);
+  padding: clamp(4px, .75vh, 10px) 0;
+  opacity: 0;
+  animation: bfadeup .28s ease forwards;
+}
+@keyframes bfadeup { to { opacity: 1; } }
+#boot .tag {
+  width: clamp(34px, 3.1vw, 50px);
+  height: clamp(17px, 1.55vw, 23px);
+  flex: none; border-radius: clamp(4px, .4vw, 6px);
+  display: flex; align-items: center; justify-content: center;
+  font-size: clamp(8px, .64vw, 10px); font-weight: 700; letter-spacing: .05em;
+  background: rgba(255,255,255,.08); color: #8E8E93;
+}
+#boot .t-blue   { background: rgba(10,132,255,.18);  color: #4DA6FF; }
+#boot .t-orange { background: rgba(255,159,10,.18);  color: #FF9F0A; }
+#boot .t-yellow { background: rgba(255,214,10,.18);  color: #FFD60A; }
+#boot .t-purple { background: rgba(191,90,242,.18);  color: #BF5AF2; }
+#boot .t-violet { background: rgba(191,90,242,.14);  color: #BF5AF2; }
+#boot .t-pink   { background: rgba(255,55,95,.18);   color: #FF375F; }
+#boot .t-green  { background: rgba(48,209,88,.18);   color: #30D158; }
+#boot .t-teal   { background: rgba(100,210,255,.18); color: #64D2FF; }
+#boot .t-gray   { background: rgba(142,142,147,.18); color: #8E8E93; }
+#boot .file {
+  flex: 1; min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: clamp(11px, .95vw, 15px); color: #E5E5EA;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#boot .size {
+  font-size: clamp(10px, .82vw, 13px); color: #48484A;
+  font-variant-numeric: tabular-nums;
+  min-width: clamp(52px, 4.6vw, 74px); text-align: right;
+}
+#boot .ms {
+  font-size: clamp(10px, .82vw, 13px); color: #48484A;
+  font-variant-numeric: tabular-nums;
+  min-width: clamp(42px, 3.8vw, 60px); text-align: right;
+}
+
+/* ───────────── 右栏：贪吃蛇 ───────────── */
+#boot .bside-right {
+  position: relative; height: 100%;
+  display: flex; align-items: center; justify-content: center;
+  padding: clamp(10px, 1.6vw, 24px);
+  min-width: 0;
+}
+#boot .game-card {
+  /* 宽度同时受「480 上限 / 父栏宽 / 窗口高」三者约束，
+     保证棋盘始终是正方形且竖着不溢出 */
+  width: min(480px, 100%, max(260px, calc(100vh - 230px)));
+  background: #0A0A0A;
+  border: 3px solid #333333;
+  border-radius: 0;            /* 像素风：全部直角 */
+  padding: clamp(10px, 1.4vw, 22px);
+  box-shadow: 0 4px 0 #000;
+}
+/* 顶部状态栏：得分（左） / RESTART（中） / HI（右），对应 tcs.html */
+#boot .sn-bar {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: clamp(6px, 1vw, 14px);
+  margin-bottom: clamp(8px, 1.2vh, 16px);
+  padding: 0 2px;
+}
+#boot .sn-score {
+  font-size: clamp(16px, 1.6vw, 26px); font-weight: 700; line-height: 1;
+  color: #39FF14; letter-spacing: .02em;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 2px 2px 0 #000;
+}
+#boot .sn-best {
+  justify-self: end;
+  font-size: clamp(9px, .72vw, 12px); color: #666666;
+  letter-spacing: .06em; font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+#boot .sn-btn {
+  height: auto; padding: clamp(5px, .55vw, 8px) clamp(8px, .9vw, 14px);
+  font-family: inherit;
+  font-size: clamp(9px, .72vw, 12px); font-weight: 700; letter-spacing: .08em;
+  background: #200000; color: #FF073A;
+  border: 2px solid #FF073A; border-radius: 0;
+  box-shadow: 2px 2px 0 #000;
+  cursor: pointer;
+  transition: transform .05s ease, box-shadow .05s ease;
+}
+#boot .sn-btn:hover { background: #300000; }
+#boot .sn-btn:active { transform: translate(2px, 2px); box-shadow: none; }
+#boot .board-wrap {
+  position: relative;
+  width: 100%; aspect-ratio: 1 / 1;
+  border: 3px solid #333333; border-radius: 0; overflow: hidden;
+  cursor: pointer;
+  background: #000000;
+  box-shadow: 0 4px 0 #000;
+}
+#boot #snBoard {
+  display: block; width: 100%; height: 100%;
+  image-rendering: pixelated;
+}
+#boot .hint {
+  margin-top: clamp(8px, 1.2vh, 14px); text-align: center;
+  font-size: clamp(9px, .68vw, 11px); color: #48484A; letter-spacing: .04em;
+}
+
+/* 窗口太窄 / 太矮 → 右栏实在放不下，只留左边（否则棋盘会被压成一条） */
+@media (max-width: 700px), (max-height: 440px) {
+  #boot .bstage { grid-template-columns: 1fr; }
+  #boot .bside-right { display: none; }
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   2026-11-04 新外壳（用户样例风格：深色悬浮面板）
+   —— 只动外壳视觉 / 布局；地震算法 / 数据源（wolfx·P2P） / 音效 完全不变。
+   ══════════════════════════════════════════════════════════════════ */
+/* 外壳层：盖在地图之上、模态框（z20+）之下；容器不吃指针，子元素各自开启 */
+#qv-shell { position: fixed; inset: 0; z-index: 15; pointer-events: none; }
+#qv-shell > * { pointer-events: none; }
+#qv-nav button { pointer-events: auto; }
+/* 角落官方图例让位给左侧竖条 */
+#maplegend { display: none !important; }
+/* 官方顶部时钟底条（timebg0）收掉，时间改到右下黄色 DOM 钟 */
+#art img[data-cos="timebg0"] { display: none !important; }
+/* ★ 2026-11-04：官方页面底片 bgsq 就是那条 240px 宽、贯穿全高的实心暗底，
+   也是「改了跟没改一样」的根因 —— CSS 改 #eewpage 完全盖不住它（它在 #art 素材层）。
+   隐藏后 #map（inset:0，铺满舞台）才能在左侧露出来，信息改由 #eewpage 悬浮深色卡承载。 */
+#art img[data-cos="bgsq"] { display: none !important; }
+
+/* ── 左侧竖向震度 / 烈度图例条 ── */
+#qv-legend {
+  position: fixed; right: 12px; top: 50%; transform: translateY(-50%);
+  width: 56px; padding: 10px 8px;
+  background: rgba(8,13,22,.92);
+  border: 1px solid rgba(255,255,255,.08); border-radius: 12px;
+  box-shadow: 0 8px 26px rgba(0,0,0,.5);
+  font-family: 'NotoSC',"Noto Sans SC","Microsoft YaHei",sans-serif;
+  color: #e6edf6;
+}
+#qv-legend .qv-lt {
+  font-size: 12px; font-weight: 700; text-align: center; margin-bottom: 8px;
+  color: #cdd7e6; letter-spacing: .06em;
+}
+#qv-legend .qv-row { display: flex; align-items: center; gap: 6px; height: 21px; }
+#qv-legend .qv-rn { font-size: 10px; width: 20px; text-align: right; color: #9fb0c4; flex: none; }
+#qv-legend .qv-sw {
+  width: 14px; height: 14px; border-radius: 3px; flex: none;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.18);
+}
+#qv-legend .qv-lb { font-size: 11px; font-weight: 600; flex: none; }
+
+/* ── 顶部中央：红色预警横幅 ── */
+#qv-banner {
+  position: fixed; left: 50%; top: 12px; transform: translateX(-50%);
+  z-index: 16; display: none; align-items: center;
+  padding: 9px 18px; border-radius: 10px;
+  background: linear-gradient(90deg, #c00000, #e23b2e); color: #fff;
+  box-shadow: 0 6px 22px rgba(200,0,0,.5);
+  font: 700 15px/1.3 'NotoSC',"Noto Sans SC","Microsoft YaHei",sans-serif;
+}
+#qv-banner.on { display: flex; }
+#qv-banner .qn {
+  font-size: 12px; font-weight: 600; opacity: .92; margin-left: 9px;
+  padding-left: 10px; border-left: 1px solid rgba(255,255,255,.4);
+}
+
+/* ── 右下：黄色时间戳 ── */
+#qv-clock {
+  position: fixed; right: 12px; bottom: 12px; z-index: 15;
+  padding: 6px 12px; border-radius: 8px;
+  background: rgba(8,13,22,.92);
+  color: #ffd54a;
+  font: 600 15px/1.2 "NotoSC","Microsoft YaHei",Consolas,monospace; letter-spacing: .03em;
+  text-shadow: 0 1px 2px rgba(0,0,0,.5);
+}
+
+/* ── 右上：状态小字 ── */
+#qv-status {
+  position: fixed; right: 12px; top: 10px; z-index: 15; text-align: right;
+  pointer-events: none;
+  font: 500 11px/1.35 'NotoSC',"Noto Sans SC","Microsoft YaHei",sans-serif; color: #8a9bb2;
+}
+#qv-status b { color: #cdd7e6; font-weight: 700; }
+
+/* ── 左下：导航（主页 / 设置） ── */
+#qv-nav {
+  position: fixed; left: 12px; bottom: 12px; z-index: 15;
+  display: flex; gap: 8px;
+}
+#qv-nav button {
+  width: 42px; height: 42px; border-radius: 10px; cursor: pointer;
+  background: rgba(8,13,22,.92);
+  border: 1px solid rgba(255,255,255,.1); color: #dce3ff;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 4px 14px rgba(0,0,0,.45);
+  transition: background .12s, transform .08s;
+}
+#qv-nav button:hover { background: rgba(30,44,66,.92); }
+#qv-nav button:active { transform: translateY(1px); }
+#qv-nav button svg { width: 20px; height: 20px; }
+
+/* ── 既有的「模拟 / 自动镜头」按钮融入新外壳（深色圆角） ── */
+#simLaunchBtn {
+  left: 104px !important; bottom: 12px !important;
+  background: rgba(10,16,26,.82) !important; color: #cfe0ff !important;
+  border: 1px solid rgba(255,255,255,.12) !important; border-radius: 10px !important;
+  box-shadow: 0 4px 14px rgba(0,0,0,.45) !important; font-weight: 600 !important;
+}
+#autoCamBtn {
+  right: 12px !important; bottom: 58px !important;
+  background: rgba(10,16,26,.82) !important; color: #cfe0ff !important;
+  border: 1px solid rgba(255,255,255,.12) !important; border-radius: 10px !important;
+  box-shadow: 0 4px 14px rgba(0,0,0,.45) !important;
+}
+#autoCamBtn:hover { background: rgba(30,44,66,.92) !important; }
